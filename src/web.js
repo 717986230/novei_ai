@@ -6,10 +6,21 @@ const AIWriter = require('./ai/writer');
 const ChapterManager = require('./novel/chapter');
 const NovelGenerator = require('./novel/generator');
 const NovelLibrary = require('./novel/library');
+const Storage = require('./novel/storage');
+const MySQLStore = require('./db/mysql');
 const { PlatformPublisher } = require('./publish');
+const workflowManager = require('./workflow/manager');
 
 const app = express();
 const PORT = 3000;
+let workflowManagerInitPromise = null;
+
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
@@ -31,12 +42,21 @@ function parseProxyUrl(proxyUrl) {
   }
 }
 
-async function createContext() {
+async function createContext(bookKey = '') {
   const config = loadConfig();
   const library = new NovelLibrary(config);
   await library.ensureInitialized();
 
-  const storage = await library.getCurrentStorage();
+  const targetBook = bookKey
+    ? { key: bookKey, dir: library.getBookDir(bookKey) }
+    : await library.getCurrentBook();
+
+  let storage = null;
+  if (targetBook?.dir) {
+    storage = new Storage(targetBook.dir, config.mysql || {});
+    await storage.init();
+  }
+
   const chapterManager = storage ? new ChapterManager(storage) : null;
   const aiWriter = new AIWriter(config.ai || {});
   const generator = storage && chapterManager ? new NovelGenerator(aiWriter, chapterManager, storage) : null;
@@ -49,15 +69,44 @@ async function createContext() {
     chapterManager,
     aiWriter,
     generator,
-    publisher
+    publisher,
+    currentBookKey: targetBook?.key || ''
   };
+}
+
+async function ensureWorkflowManager() {
+  if (!workflowManagerInitPromise) {
+    const config = loadConfig();
+    const store = new MySQLStore(config.mysql || {}, '__workflow_store__');
+    workflowManagerInitPromise = workflowManager.initialize(store);
+  }
+
+  await workflowManagerInitPromise;
+}
+
+function ensureNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function safeConfigForResponse(config) {
+  const next = JSON.parse(JSON.stringify(config || {}));
+
+  if (next.ai) {
+    next.ai.hasApiKey = Boolean(next.ai.apiKey);
+    next.ai.apiKey = next.ai.apiKey ? '********' : '';
+  }
+
+  if (next.mysql) {
+    next.mysql.hasPassword = Boolean(next.mysql.password);
+    next.mysql.password = next.mysql.password ? '********' : '';
+  }
+
+  return next;
 }
 
 app.get('/api/health', async (req, res) => {
   const { config, storage } = await createContext();
-  if (storage) {
-    await storage.init();
-  }
 
   res.json({
     success: true,
@@ -70,18 +119,7 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/api/config', async (req, res) => {
   const { config } = await createContext();
-
-  if (config.ai) {
-    config.ai.hasApiKey = Boolean(config.ai.apiKey);
-    config.ai.apiKey = config.ai.apiKey ? '********' : '';
-  }
-
-  if (config.mysql) {
-    config.mysql.hasPassword = Boolean(config.mysql.password);
-    config.mysql.password = config.mysql.password ? '********' : '';
-  }
-
-  res.json(config);
+  res.json(safeConfigForResponse(config));
 });
 
 app.post('/api/save-config', (req, res) => {
@@ -135,7 +173,7 @@ app.post('/api/test-connection', async (req, res) => {
       finalApiUrl,
       {
         model: finalModel,
-        messages: [{ role: 'user', content: '你好，请回复“连接成功”。' }],
+        messages: [{ role: 'user', content: '你好，请只回复“连接成功”。' }],
         max_tokens: 100
       },
       axiosConfig
@@ -170,7 +208,7 @@ app.post('/api/books', async (req, res) => {
       : await context.aiWriter.generateBookTitle({ type, description });
 
     const created = await context.library.createBook({ title: finalTitle, type, description });
-    const { storage, generator } = await createContext();
+    const nextContext = await createContext(created.key);
 
     const novelInfo = {
       title: finalTitle,
@@ -181,10 +219,10 @@ app.post('/api/books', async (req, res) => {
       createdAt: new Date().toISOString()
     };
 
-    await storage.saveNovelInfo(novelInfo);
+    await nextContext.storage.saveNovelInfo(novelInfo);
 
     try {
-      await generator.generateOutline(novelInfo);
+      await nextContext.generator.generateOutline(novelInfo);
     } catch (error) {
       console.warn('生成大纲失败:', error.message);
     }
@@ -234,7 +272,7 @@ app.delete('/api/books/:bookKey', async (req, res) => {
 });
 
 app.get('/api/novel-info', async (req, res) => {
-  const { storage, chapterManager, library } = await createContext();
+  const { storage, chapterManager, library, currentBookKey } = await createContext();
   const currentBook = await library.getCurrentBook();
   const novelInfo = storage ? await storage.getNovelInfo() : null;
   const stats = chapterManager ? await chapterManager.getStatistics() : {
@@ -248,7 +286,7 @@ app.get('/api/novel-info', async (req, res) => {
   res.json({
     ...(novelInfo || {}),
     stats,
-    currentBookKey: currentBook?.key || ''
+    currentBookKey: currentBook?.key || currentBookKey || ''
   });
 });
 
@@ -258,16 +296,67 @@ app.get('/api/chapters', async (req, res) => {
   res.json(chapters);
 });
 
+app.get('/api/chapters/:number', async (req, res) => {
+  const { chapterManager } = await createContext();
+  const number = ensureNumber(req.params.number);
+
+  if (!chapterManager) {
+    res.json({ success: false, error: '请先选择一本书' });
+    return;
+  }
+
+  if (!number) {
+    res.json({ success: false, error: '章节编号无效' });
+    return;
+  }
+
+  const chapter = await chapterManager.getChapter(number);
+  if (!chapter) {
+    res.json({ success: false, error: '章节不存在' });
+    return;
+  }
+
+  res.json({ success: true, chapter });
+});
+
+app.put('/api/chapters/:number', async (req, res) => {
+  const { chapterManager } = await createContext();
+  const number = ensureNumber(req.params.number);
+  const { title, content, outline } = req.body || {};
+
+  if (!chapterManager) {
+    res.json({ success: false, error: '请先选择一本书' });
+    return;
+  }
+
+  if (!number) {
+    res.json({ success: false, error: '章节编号无效' });
+    return;
+  }
+
+  try {
+    const chapter = await chapterManager.updateChapter(number, { title, content, outline });
+    if (!chapter) {
+      res.json({ success: false, error: '章节不存在' });
+      return;
+    }
+
+    res.json({ success: true, chapter });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
 app.delete('/api/chapters/:number', async (req, res) => {
   const { storage } = await createContext();
-  const number = Number(req.params.number);
+  const number = ensureNumber(req.params.number);
 
   if (!storage) {
     res.json({ success: false, error: '请先选择一本书' });
     return;
   }
 
-  if (!Number.isInteger(number) || number <= 0) {
+  if (!number) {
     res.json({ success: false, error: '章节编号无效' });
     return;
   }
@@ -301,7 +390,7 @@ app.post('/api/create-novel', async (req, res) => {
   const { title, type, description } = req.body;
 
   if (!storage || !generator) {
-    res.json({ success: false, error: '请先新增一本书并选中它' });
+    res.json({ success: false, error: '请先新增并选中一本书' });
     return;
   }
 
@@ -358,36 +447,133 @@ app.post('/api/generate-title', async (req, res) => {
   }
 });
 
-app.post('/api/generate-chapter', async (req, res) => {
-  const { storage, generator } = await createContext();
-  const novelInfo = storage ? await storage.getNovelInfo() : null;
+app.get('/api/workflows', async (req, res) => {
+  await ensureWorkflowManager();
+  const { currentBookKey } = await createContext();
+  const bookKey = req.query.bookKey || currentBookKey || '';
+  const workflows = await workflowManager.list({ bookKey });
+  res.json({ success: true, workflows });
+});
 
-  if (!storage || !generator || !novelInfo) {
-    res.json({ success: false, error: '请先新增并配置一本书' });
+app.get('/api/workflows/:id', async (req, res) => {
+  await ensureWorkflowManager();
+  const workflow = await workflowManager.get(req.params.id);
+
+  if (!workflow) {
+    res.json({ success: false, error: '工作流不存在' });
     return;
   }
 
+  res.json({ success: true, workflow });
+});
+
+async function createGenerationWorkflow({ bookKey, count = 1 }) {
+  await ensureWorkflowManager();
+  const { storage, currentBookKey } = await createContext(bookKey);
+  const targetBookKey = bookKey || currentBookKey || '';
+  const novelInfo = storage ? await storage.getNovelInfo() : null;
+
+  if (!storage || !novelInfo || !targetBookKey) {
+    throw new Error('请先新增并配置一本书');
+  }
+
+  return workflowManager.create({
+    type: count > 1 ? 'generate-chapters' : 'generate-next-chapter',
+    title: count > 1 ? `批量生成 ${count} 章` : '生成下一章',
+    bookKey: targetBookKey,
+    payload: { count },
+    run: async ({ update }) => {
+      const taskContext = await createContext(targetBookKey);
+      const taskNovelInfo = await taskContext.storage.getNovelInfo();
+
+      if (!taskContext.generator || !taskNovelInfo) {
+        throw new Error('当前书籍上下文无效，无法执行生成');
+      }
+
+      const generated = [];
+      for (let index = 0; index < count; index += 1) {
+        await update({
+          progress: {
+            current: index,
+            total: count,
+            message: count > 1
+              ? `正在生成第 ${index + 1}/${count} 章`
+              : '正在请求 AI 生成下一章'
+          }
+        });
+
+        const chapter = await taskContext.generator.generateNextChapter(taskNovelInfo);
+        generated.push({
+          number: chapter.number,
+          title: chapter.title,
+          wordCount: chapter.wordCount || 0
+        });
+
+        await update({
+          progress: {
+            current: index + 1,
+            total: count,
+            message: `已完成第 ${chapter.number} 章`
+          }
+        });
+      }
+
+      return {
+        count,
+        chapters: generated,
+        latestChapterNumber: generated.length ? generated[generated.length - 1].number : 0
+      };
+    }
+  });
+}
+
+app.post('/api/workflows/generate-next-chapter', async (req, res) => {
   try {
-    const chapter = await generator.generateNextChapter(novelInfo);
-    res.json({ success: true, chapter });
+    const { currentBookKey } = await createContext();
+    const workflow = await createGenerationWorkflow({
+      bookKey: req.body?.bookKey || currentBookKey,
+      count: 1
+    });
+    res.json({ success: true, workflow });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/workflows/generate-chapters', async (req, res) => {
+  try {
+    const { currentBookKey } = await createContext();
+    const workflow = await createGenerationWorkflow({
+      bookKey: req.body?.bookKey || currentBookKey,
+      count: Math.max(1, Number(req.body?.count) || 1)
+    });
+    res.json({ success: true, workflow });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/generate-chapter', async (req, res) => {
+  try {
+    const { currentBookKey } = await createContext();
+    const workflow = await createGenerationWorkflow({
+      bookKey: req.body?.bookKey || currentBookKey,
+      count: 1
+    });
+    res.json({ success: true, workflow });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
 });
 
 app.post('/api/generate-chapters', async (req, res) => {
-  const { storage, generator } = await createContext();
-  const { count } = req.body;
-  const novelInfo = storage ? await storage.getNovelInfo() : null;
-
-  if (!storage || !generator || !novelInfo) {
-    res.json({ success: false, error: '请先新增并配置一本书' });
-    return;
-  }
-
   try {
-    const chapters = await generator.generateChapters(novelInfo, Number(count) || 1);
-    res.json({ success: true, count: chapters.length });
+    const { currentBookKey } = await createContext();
+    const workflow = await createGenerationWorkflow({
+      bookKey: req.body?.bookKey || currentBookKey,
+      count: Math.max(1, Number(req.body?.count) || 1)
+    });
+    res.json({ success: true, workflow });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
@@ -452,7 +638,8 @@ app.post('/api/repair-data', async (req, res) => {
   }
 });
 
-function startServer() {
+async function startServer() {
+  await ensureWorkflowManager();
   app.listen(PORT, () => {
     console.log(`\nWeb 界面已启动: http://localhost:${PORT}\n`);
   });
@@ -461,5 +648,8 @@ function startServer() {
 module.exports = { app, startServer };
 
 if (require.main === module) {
-  startServer();
+  startServer().catch((error) => {
+    console.error('启动失败:', error);
+    process.exit(1);
+  });
 }

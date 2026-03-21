@@ -24,6 +24,26 @@ class ChapterManager {
     return this.storage.getChapter(number);
   }
 
+  async updateChapter(number, patch = {}) {
+    const existing = await this.storage.getChapter(number);
+    if (!existing) {
+      return null;
+    }
+
+    const next = {
+      ...existing,
+      ...patch,
+      number: existing.number,
+      title: typeof patch.title === 'string' ? patch.title : existing.title,
+      content: typeof patch.content === 'string' ? patch.content : existing.content,
+      outline: typeof patch.outline === 'string' ? patch.outline : existing.outline
+    };
+
+    next.wordCount = (next.content || '').length;
+    await this.storage.saveChapter(next);
+    return next;
+  }
+
   async getAllChapters() {
     return this.storage.getAllChapters();
   }

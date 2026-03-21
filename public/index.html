@@ -3,222 +3,468 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI 小说写作系统</title>
+  <title>小说系统配置</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
+    :root {
+      color-scheme: light;
+      --page-bg: radial-gradient(circle at top left, #dbeafe 0%, #f8fafc 35%, #fef3c7 100%);
+      --card-bg: rgba(255, 255, 255, 0.92);
+      --card-border: rgba(148, 163, 184, 0.25);
+      --shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
     }
-    .container {
-      background: #fff;
-      border-radius: 16px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
-      width: 100%;
-      max-width: 520px;
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: var(--page-bg);
+      min-height: 100vh;
+      color: #0f172a;
+    }
+
+    #app {
+      min-height: 100vh;
+      padding: 32px 20px;
+    }
+
+    .page-shell {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .hero-card,
+    .form-card,
+    .tips-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .hero-card {
+      margin-bottom: 24px;
+      border-radius: 24px;
       overflow: hidden;
     }
-    .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 30px;
-      text-align: center;
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 0;
+      min-height: 240px;
     }
-    .header h1 { font-size: 24px; margin-bottom: 8px; }
-    .header p { opacity: 0.9; font-size: 14px; }
-    .content { padding: 30px; }
-    .form-group { margin-bottom: 20px; }
-    .form-group label {
+
+    .hero-copy {
+      padding: 36px;
+      background:
+        linear-gradient(140deg, rgba(15, 118, 110, 0.92) 0%, rgba(14, 165, 233, 0.88) 100%),
+        linear-gradient(90deg, #0f766e 0%, #0ea5e9 100%);
+      color: #fff;
+    }
+
+    .hero-copy h1 {
+      margin: 0 0 12px;
+      font-size: 34px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .hero-copy p {
+      margin: 0;
+      max-width: 540px;
+      line-height: 1.75;
+      font-size: 15px;
+      opacity: 0.96;
+    }
+
+    .hero-side {
+      padding: 28px;
+      display: grid;
+      gap: 14px;
+      align-content: center;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.98) 100%);
+    }
+
+    .hero-chip {
+      border-radius: 18px;
+      padding: 16px 18px;
+      background: #fff;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+    }
+
+    .hero-chip strong {
       display: block;
-      margin-bottom: 8px;
-      color: #333;
-      font-weight: 600;
+      margin-bottom: 6px;
+      color: #0f766e;
       font-size: 14px;
     }
-    .form-group input {
-      width: 100%;
-      padding: 12px 16px;
-      border: 2px solid #e5e7eb;
-      border-radius: 8px;
+
+    .hero-chip span {
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .form-card,
+    .tips-card {
+      border-radius: 22px;
+    }
+
+    .card-head {
+      padding: 24px 24px 0;
+    }
+
+    .card-head h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .card-head p {
+      margin: 10px 0 0;
+      color: #64748b;
+      line-height: 1.7;
       font-size: 14px;
     }
-    .form-group input:focus { outline: none; border-color: #667eea; }
-    .hint { margin-top: 6px; font-size: 12px; color: #6b7280; }
-    .btn {
-      width: 100%;
-      padding: 14px;
-      border: none;
-      border-radius: 8px;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-      margin-bottom: 12px;
+
+    .card-body {
+      padding: 20px 24px 24px;
     }
-    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-    .btn-secondary { background: #f3f4f6; color: #374151; }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .result {
-      margin-top: 20px;
-      padding: 16px;
-      border-radius: 8px;
-      display: none;
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 8px;
     }
-    .result.success { display: block; background: #d1fae5; border: 1px solid #34d399; color: #065f46; }
-    .result.error { display: block; background: #fee2e2; border: 1px solid #f87171; color: #991b1b; }
-    .result-title { font-weight: 700; margin-bottom: 8px; }
-    .loading {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid #fff;
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-right: 8px;
+
+    .tips-list {
+      display: grid;
+      gap: 14px;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .tip-item {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(248, 250, 252, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .tip-item strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+      color: #0f172a;
+    }
+
+    .tip-item span {
+      display: block;
+      color: #64748b;
+      line-height: 1.7;
+      font-size: 13px;
+    }
+
+    .footer-text {
+      margin-top: 18px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid,
+      .main-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-copy h1 {
+        font-size: 28px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>AI 小说写作系统</h1>
-      <p>本地可用版配置面板</p>
-    </div>
+  <div id="app"></div>
 
-    <div class="content">
-      <div class="form-group">
-        <label>API 地址</label>
-        <input type="text" id="apiUrl" placeholder="https://integrate.api.nvidia.com/v1/chat/completions">
-      </div>
-
-      <div class="form-group">
-        <label>API Key</label>
-        <input type="password" id="apiKey" placeholder="输入 API Key">
-        <div class="hint">如已保存过 Key，可留空并继续使用当前配置。</div>
-      </div>
-
-      <div class="form-group">
-        <label>模型名称</label>
-        <input type="text" id="model" placeholder="minimaxai/minimax-m2.5">
-      </div>
-
-      <div class="form-group">
-        <label>代理地址（可选）</label>
-        <input type="text" id="proxyUrl" placeholder="http://127.0.0.1:7890">
-        <div class="hint">默认不走系统代理，只有这里填写时才会使用代理。</div>
-      </div>
-
-      <button class="btn btn-primary" id="testBtn" onclick="testConnection()">测试连接</button>
-      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">保存配置</button>
-      <button class="btn btn-secondary" onclick="openManager()">打开管理面板</button>
-
-      <div class="result" id="result"></div>
-    </div>
-  </div>
-
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
   <script>
-    let hasSavedApiKey = false;
+    const { createApp, ref, reactive, onMounted } = Vue;
+    const { ElMessage, ElNotification } = ElementPlus;
 
-    async function loadConfig() {
-      try {
-        const res = await fetch('/api/config');
-        const config = await res.json();
-
-        if (config.ai) {
-          hasSavedApiKey = !!config.ai.hasApiKey;
-          document.getElementById('apiUrl').value = config.ai.apiUrl || '';
-          document.getElementById('model').value = config.ai.model || '';
-          document.getElementById('proxyUrl').value = config.ai.proxyUrl || '';
-        }
-      } catch (error) {
-        console.error('加载配置失败:', error);
-      }
-    }
-
-    async function testConnection() {
-      const apiUrl = document.getElementById('apiUrl').value.trim();
-      const apiKey = document.getElementById('apiKey').value.trim();
-      const model = document.getElementById('model').value.trim();
-      const proxyUrl = document.getElementById('proxyUrl').value.trim();
-
-      if (!apiUrl || (!apiKey && !hasSavedApiKey)) {
-        showResult(false, '请填写 API 地址，且提供 API Key 或使用已保存的 Key。');
-        return;
-      }
-
-      const btn = document.getElementById('testBtn');
-      btn.disabled = true;
-      btn.innerHTML = '<span class="loading"></span>连接中...';
-
-      try {
-        const res = await fetch('/api/test-connection', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiUrl, apiKey, model, proxyUrl })
+    createApp({
+      setup() {
+        const loadingConfig = ref(false);
+        const testing = ref(false);
+        const saving = ref(false);
+        const hasSavedApiKey = ref(false);
+        const health = reactive({
+          aiConfigured: false,
+          mysqlEnabled: false,
+          mysqlAvailable: false
         });
-        const data = await res.json();
-        showResult(data.success, data.success ? `连接成功：${data.message}` : `连接失败：${data.error}`);
-      } catch (error) {
-        showResult(false, `连接失败：${error.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '测试连接';
-      }
-    }
-
-    async function saveConfig() {
-      const apiUrl = document.getElementById('apiUrl').value.trim();
-      const apiKey = document.getElementById('apiKey').value.trim();
-      const model = document.getElementById('model').value.trim();
-      const proxyUrl = document.getElementById('proxyUrl').value.trim();
-
-      if (!apiUrl || (!apiKey && !hasSavedApiKey)) {
-        showResult(false, '请填写 API 地址，且提供 API Key 或使用已保存的 Key。');
-        return;
-      }
-
-      const btn = document.getElementById('saveBtn');
-      btn.disabled = true;
-      btn.textContent = '保存中...';
-
-      try {
-        const res = await fetch('/api/save-config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiUrl, apiKey, model, proxyUrl })
+        const form = reactive({
+          apiUrl: '',
+          apiKey: '',
+          model: '',
+          proxyUrl: ''
         });
-        const data = await res.json();
 
-        if (data.success && apiKey) {
-          hasSavedApiKey = true;
+        async function loadConfig() {
+          loadingConfig.value = true;
+          try {
+            const [configRes, healthRes] = await Promise.all([
+              fetch('/api/config'),
+              fetch('/api/health')
+            ]);
+            const config = await configRes.json();
+            const healthData = await healthRes.json();
+
+            hasSavedApiKey.value = Boolean(config.ai?.hasApiKey);
+            form.apiUrl = config.ai?.apiUrl || '';
+            form.model = config.ai?.model || 'minimaxai/minimax-m2.5';
+            form.proxyUrl = config.ai?.proxyUrl || '';
+            form.apiKey = '';
+
+            health.aiConfigured = Boolean(healthData.aiConfigured);
+            health.mysqlEnabled = Boolean(healthData.mysqlEnabled);
+            health.mysqlAvailable = Boolean(healthData.mysqlAvailable);
+          } catch (error) {
+            ElMessage.error(`加载配置失败：${error.message}`);
+          } finally {
+            loadingConfig.value = false;
+          }
         }
 
-        showResult(Boolean(data.success), data.success ? '配置已保存。' : '保存失败。');
-      } catch (error) {
-        showResult(false, `保存失败：${error.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '保存配置';
-      }
-    }
+        function validateForm() {
+          if (!form.apiUrl.trim()) {
+            ElMessage.warning('请填写 API 地址');
+            return false;
+          }
 
-    function openManager() {
-      window.location.href = '/manager.html';
-    }
+          if (!form.apiKey.trim() && !hasSavedApiKey.value) {
+            ElMessage.warning('请提供 API Key，或先使用已保存的 Key');
+            return false;
+          }
 
-    function showResult(success, message) {
-      const result = document.getElementById('result');
-      result.className = `result ${success ? 'success' : 'error'}`;
-      result.innerHTML = `<div class="result-title">${success ? '成功' : '失败'}</div>${message}`;
-    }
+          return true;
+        }
 
-    loadConfig();
+        async function testConnection() {
+          if (!validateForm()) {
+            return;
+          }
+
+          testing.value = true;
+          try {
+            const res = await fetch('/api/test-connection', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                apiUrl: form.apiUrl.trim(),
+                apiKey: form.apiKey.trim(),
+                model: form.model.trim(),
+                proxyUrl: form.proxyUrl.trim()
+              })
+            });
+            const data = await res.json();
+
+            if (!data.success) {
+              throw new Error(data.error || '连接测试失败');
+            }
+
+            ElNotification({
+              title: '连接成功',
+              message: data.message || '模型接口已正常返回',
+              type: 'success'
+            });
+          } catch (error) {
+            ElNotification({
+              title: '连接失败',
+              message: error.message,
+              type: 'error'
+            });
+          } finally {
+            testing.value = false;
+          }
+        }
+
+        async function saveConfig() {
+          if (!validateForm()) {
+            return;
+          }
+
+          saving.value = true;
+          try {
+            const res = await fetch('/api/save-config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                apiUrl: form.apiUrl.trim(),
+                apiKey: form.apiKey.trim(),
+                model: form.model.trim(),
+                proxyUrl: form.proxyUrl.trim()
+              })
+            });
+            const data = await res.json();
+
+            if (!data.success) {
+              throw new Error(data.error || '保存失败');
+            }
+
+            if (form.apiKey.trim()) {
+              hasSavedApiKey.value = true;
+              form.apiKey = '';
+            }
+
+            ElNotification({
+              title: '保存成功',
+              message: '配置已写入本地，管理台会使用这套配置继续工作。',
+              type: 'success'
+            });
+            await loadConfig();
+          } catch (error) {
+            ElNotification({
+              title: '保存失败',
+              message: error.message,
+              type: 'error'
+            });
+          } finally {
+            saving.value = false;
+          }
+        }
+
+        function openManager() {
+          window.location.href = '/manager.html';
+        }
+
+        onMounted(loadConfig);
+
+        return {
+          loadingConfig,
+          testing,
+          saving,
+          hasSavedApiKey,
+          health,
+          form,
+          testConnection,
+          saveConfig,
+          openManager
+        };
+      },
+      template: `
+        <div class="page-shell">
+          <section class="hero-card">
+            <div class="hero-grid">
+              <div class="hero-copy">
+                <h1>Node + Vue 3 + Element Plus 小说系统</h1>
+                <p>
+                  后端继续使用 Node/Express 维护生成、存储和工作流接口，前端已切换为 Vue 3 + Element Plus。
+                  这页负责模型配置和环境连通性，管理工作台会继续基于同一套接口运行。
+                </p>
+              </div>
+              <div class="hero-side">
+                <div class="hero-chip">
+                  <strong>AI 配置状态</strong>
+                  <span>{{ health.aiConfigured ? '已检测到 AI 配置' : '当前还没有完整的 AI 配置' }}</span>
+                </div>
+                <div class="hero-chip">
+                  <strong>MySQL 状态</strong>
+                  <span>{{ health.mysqlEnabled ? (health.mysqlAvailable ? 'MySQL 已连接，可用作主存储' : 'MySQL 已启用，但当前不可用') : '当前未启用 MySQL' }}</span>
+                </div>
+                <div class="hero-chip">
+                  <strong>工作台入口</strong>
+                  <span>完成配置后，直接进入书籍管理和章节工作流页面。</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="main-grid">
+            <el-card class="form-card" shadow="never" v-loading="loadingConfig">
+              <template #header>
+                <div class="card-head">
+                  <h2>模型配置</h2>
+                  <p>当前建议保持 NVIDIA 兼容接口和 `minimaxai/minimax-m2.5`。代理默认关闭，只有你显式填写时才会使用。</p>
+                </div>
+              </template>
+
+              <div class="card-body">
+                <el-form label-position="top" :model="form" size="large">
+                  <el-form-item label="API 地址">
+                    <el-input v-model="form.apiUrl" placeholder="https://integrate.api.nvidia.com/v1/chat/completions" clearable />
+                  </el-form-item>
+
+                  <el-form-item label="API Key">
+                    <el-input
+                      v-model="form.apiKey"
+                      type="password"
+                      show-password
+                      clearable
+                      placeholder="输入 API Key"
+                    />
+                    <div class="footer-text">
+                      {{ hasSavedApiKey ? '当前已经有已保存的 Key。你可以留空，继续使用现有密钥。' : '当前没有已保存的 Key，本次必须填写。' }}
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item label="模型名称">
+                    <el-input v-model="form.model" placeholder="minimaxai/minimax-m2.5" clearable />
+                  </el-form-item>
+
+                  <el-form-item label="代理地址（可选）">
+                    <el-input v-model="form.proxyUrl" placeholder="http://127.0.0.1:7890" clearable />
+                  </el-form-item>
+
+                  <div class="action-row">
+                    <el-button type="primary" :loading="testing" @click="testConnection">测试连接</el-button>
+                    <el-button type="success" :loading="saving" @click="saveConfig">保存配置</el-button>
+                    <el-button @click="openManager">打开管理台</el-button>
+                  </div>
+                </el-form>
+              </div>
+            </el-card>
+
+            <el-card class="tips-card" shadow="never">
+              <template #header>
+                <div class="card-head">
+                  <h2>运行说明</h2>
+                  <p>这套结构现在已经是 `Node 后端 + Vue 3 前端 + Element Plus UI`。先不引入打包器，保持部署简单。</p>
+                </div>
+              </template>
+
+              <div class="card-body">
+                <div class="tips-list">
+                  <div class="tip-item">
+                    <strong>后端框架</strong>
+                    <span>Express 负责 API、工作流、MySQL 读写和静态资源托管。</span>
+                  </div>
+                  <div class="tip-item">
+                    <strong>前端框架</strong>
+                    <span>Vue 3 负责状态和交互，Element Plus 负责表单、表格、抽屉和消息反馈。</span>
+                  </div>
+                  <div class="tip-item">
+                    <strong>稳定性原则</strong>
+                    <span>页面只做局部刷新，不做整页频繁 reload；工作流状态由后端持久化，刷新页面后仍可恢复显示。</span>
+                  </div>
+                  <div class="tip-item">
+                    <strong>下一步建议</strong>
+                    <span>如果你要继续升级，我下一步会把管理台也完全换成 Vue 组件式结构，并拆出可维护的前端模块。</span>
+                  </div>
+                </div>
+              </div>
+            </el-card>
+          </section>
+        </div>
+      `
+    }).use(ElementPlus).mount('#app');
   </script>
 </body>
 </html>
