@@ -1,0 +1,7 @@
+.env
+node_modules/
+output/
+*.log
+*.stdout.log
+*.stderr.log
+config/settings.json

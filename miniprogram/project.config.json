@@ -1,0 +1,14 @@
+{
+  "description": "novel-ai mini program",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "novel-ai-mini",
+  "miniprogramRoot": "./"
+}

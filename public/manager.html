@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>书籍管理</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: linear-gradient(135deg, #f8fafc 0%, #dbeafe 48%, #fef3c7 100%);
+      color: #1f2937;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 1320px; margin: 0 auto; }
+    .header, .panel, .stat-card {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 18px;
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+    }
+    .header {
+      padding: 24px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .header h1 { font-size: 28px; }
+    .header p { margin-top: 6px; color: #64748b; font-size: 14px; }
+    .header a { color: #0f766e; text-decoration: none; font-weight: 700; }
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 20px;
+    }
+    .panel { padding: 22px; margin-bottom: 20px; }
+    .panel h2 {
+      font-size: 18px;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #334155;
+    }
+    .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .form-group textarea { min-height: 96px; resize: vertical; }
+    .form-group input:focus, .form-group textarea:focus {
+      outline: none;
+      border-color: #0f766e;
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+    .hint { margin-top: 8px; color: #64748b; font-size: 12px; line-height: 1.5; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .btn {
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 800;
+      padding: 12px 18px;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+    .btn-primary { background: linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%); color: #fff; }
+    .btn-secondary { background: #ecfeff; color: #0f766e; }
+    .btn-danger { background: #fff1f2; color: #be123c; }
+    .result-box {
+      display: none;
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .result-box.show { display: block; }
+    .result-box.success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    .result-box.error { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+    .book-list { display: grid; gap: 12px; max-height: 520px; overflow-y: auto; }
+    .book-item {
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 14px;
+      background: #fff;
+    }
+    .book-item.active {
+      border-color: #14b8a6;
+      box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12);
+    }
+    .book-item h3 { font-size: 15px; margin-bottom: 6px; }
+    .book-meta { font-size: 12px; color: #64748b; line-height: 1.6; }
+    .book-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .book-actions button {
+      flex: 1;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .book-actions .select-btn { background: #ecfeff; color: #0f766e; }
+    .book-actions .delete-btn { background: #fff1f2; color: #be123c; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .stat-card { padding: 18px; }
+    .stat-value { font-size: 30px; font-weight: 800; color: #0f766e; }
+    .stat-label { margin-top: 8px; color: #64748b; font-size: 13px; }
+    .chapter-list { max-height: 620px; overflow-y: auto; }
+    .chapter-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .chapter-item:last-child { border-bottom: none; }
+    .chapter-info h3 { font-size: 15px; margin-bottom: 6px; }
+    .chapter-info span { font-size: 12px; color: #64748b; }
+    .chapter-status {
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .chapter-status.published { background: #dcfce7; color: #166534; }
+    .chapter-status.unpublished { background: #fef3c7; color: #92400e; }
+    .chapter-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .mini-btn {
+      border: none;
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .mini-btn.delete { background: #fff1f2; color: #be123c; }
+    .loading {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.75);
+      border-top-color: transparent;
+      border-radius: 50%;
+      margin-right: 8px;
+      vertical-align: middle;
+      animation: spin 0.8s linear infinite;
+    }
+    .empty { color: #64748b; text-align: center; padding: 24px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .stats { grid-template-columns: 1fr 1fr; }
+      .header { flex-direction: column; align-items: flex-start; }
+    }
+    @media (max-width: 560px) {
+      .stats { grid-template-columns: 1fr; }
+      .chapter-item { flex-direction: column; align-items: flex-start; }
+      .book-actions { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>书籍管理台</h1>
+        <p>新增、切换、删除书籍，并对当前选中书执行生成、删章和重置。</p>
+      </div>
+      <a href="/">返回配置页</a>
+    </div>
+
+    <div class="layout">
+      <div>
+        <div class="panel">
+          <h2>书籍管理</h2>
+          <div class="form-group">
+            <label for="newBookTitle">书名</label>
+            <input id="newBookTitle" type="text" placeholder="可留空，由 AI 自动生成">
+          </div>
+          <div class="form-group">
+            <label for="newBookType">类型</label>
+            <input id="newBookType" type="text" placeholder="例如：都市异能、玄幻、悬疑">
+          </div>
+          <div class="form-group">
+            <label for="newBookDesc">简介</label>
+            <textarea id="newBookDesc" placeholder="输入主角设定、冲突、世界观"></textarea>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="createBook()">新增书籍</button>
+          </div>
+          <div class="hint">新增书籍后会自动切换到该书，并初始化该书目录。</div>
+          <div class="result-box" id="bookResult"></div>
+        </div>
+
+        <div class="panel">
+          <h2>书籍列表</h2>
+          <div class="book-list" id="bookList">
+            <div class="empty">暂无书籍</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="stats">
+          <div class="stat-card"><div class="stat-value" id="totalChapters">0</div><div class="stat-label">总章节</div></div>
+          <div class="stat-card"><div class="stat-value" id="publishedChapters">0</div><div class="stat-label">已发布</div></div>
+          <div class="stat-card"><div class="stat-value" id="totalWords">0</div><div class="stat-label">总字数</div></div>
+          <div class="stat-card"><div class="stat-value" id="avgWords">0</div><div class="stat-label">平均字数</div></div>
+        </div>
+
+        <div class="panel">
+          <h2>当前书籍</h2>
+          <div class="form-group">
+            <label for="novelTitle">书名</label>
+            <input id="novelTitle" type="text" placeholder="先从左侧新增或选择一本书">
+          </div>
+          <div class="form-group">
+            <label for="novelType">类型</label>
+            <input id="novelType" type="text">
+          </div>
+          <div class="form-group">
+            <label for="novelDesc">简介</label>
+            <textarea id="novelDesc"></textarea>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="saveCurrentBook()">保存当前书信息</button>
+            <button class="btn btn-danger" onclick="resetCurrentBook()">重置当前书</button>
+          </div>
+          <div class="hint">重置当前书会保留书名、类型、简介，但清空这本书的全部章节和大纲。</div>
+          <div class="result-box" id="currentBookResult"></div>
+        </div>
+
+        <div class="panel">
+          <h2>章节操作</h2>
+          <div class="actions">
+            <button class="btn btn-primary" id="btnGenerateOne" onclick="generateChapter(event)">生成下一章</button>
+            <button class="btn btn-secondary" id="btnGenerateTen" onclick="generateChapters(10, event)">连续生成 10 章</button>
+            <button class="btn btn-secondary" id="btnRepair" onclick="repairData(event)">修复当前书数据</button>
+            <button class="btn btn-danger" id="btnPublish" onclick="publishChapters(event)">发布待发布章节</button>
+          </div>
+          <div class="result-box" id="chapterResult"></div>
+          <div class="result-box" id="publishResult"></div>
+        </div>
+
+        <div class="panel">
+          <h2>章节列表</h2>
+          <div class="chapter-list" id="chapterList">
+            <div class="empty">当前书暂无章节</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentBookKey = '';
+
+    async function loadBooks() {
+      const res = await fetch('/api/books');
+      const data = await res.json();
+      currentBookKey = data.currentBookKey || '';
+      const list = document.getElementById('bookList');
+
+      if (!Array.isArray(data.books) || data.books.length === 0) {
+        list.innerHTML = '<div class="empty">暂无书籍</div>';
+        return;
+      }
+
+      list.innerHTML = data.books.map((book) => `
+        <div class="book-item ${book.key === currentBookKey ? 'active' : ''}">
+          <h3>${escapeHtml(book.title || book.key)}</h3>
+          <div class="book-meta">
+            <div>类型：${escapeHtml(book.type || '未设置')}</div>
+            <div>章节：${book.chapterCount || 0}</div>
+            <div>目录：${escapeHtml(book.key)}</div>
+          </div>
+          <div class="book-actions">
+            <button class="select-btn" onclick="selectBook('${escapeAttr(book.key)}')">${book.key === currentBookKey ? '当前书籍' : '切换到这本'}</button>
+            <button class="delete-btn" onclick="deleteBook('${escapeAttr(book.key)}')">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function loadCurrentBook() {
+      const res = await fetch('/api/novel-info');
+      const data = await res.json();
+
+      document.getElementById('novelTitle').value = data.title || '';
+      document.getElementById('novelType').value = data.type || '';
+      document.getElementById('novelDesc').value = data.description || '';
+
+      document.getElementById('totalChapters').textContent = data.stats?.total || 0;
+      document.getElementById('publishedChapters').textContent = data.stats?.published || 0;
+      document.getElementById('totalWords').textContent = formatNumber(data.stats?.totalWords || 0);
+      document.getElementById('avgWords').textContent = formatNumber(data.stats?.averageWords || 0);
+    }
+
+    async function loadChapterList() {
+      const res = await fetch('/api/chapters');
+      const chapters = await res.json();
+      const list = document.getElementById('chapterList');
+
+      if (!Array.isArray(chapters) || chapters.length === 0) {
+        list.innerHTML = '<div class="empty">当前书暂无章节</div>';
+        return;
+      }
+
+      list.innerHTML = chapters.map((chapter) => `
+        <div class="chapter-item">
+          <div class="chapter-info">
+            <h3>第 ${chapter.number} 章 · ${escapeHtml(chapter.title || '未命名章节')}</h3>
+            <span>${chapter.wordCount || 0} 字 ｜ ${formatDate(chapter.createdAt)}</span>
+            <div class="chapter-actions">
+              <button class="mini-btn delete" onclick="deleteChapter(${chapter.number})">删除本章</button>
+            </div>
+          </div>
+          <span class="chapter-status ${chapter.published ? 'published' : 'unpublished'}">
+            ${chapter.published ? '已发布' : '待发布'}
+          </span>
+        </div>
+      `).reverse().join('');
+    }
+
+    async function createBook() {
+      const title = document.getElementById('newBookTitle').value.trim();
+      const type = document.getElementById('newBookType').value.trim();
+      const description = document.getElementById('newBookDesc').value.trim();
+
+      if (!type && !description && !title) {
+        showResult('bookResult', '请至少填写书名、类型或简介中的一项。', false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/books', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, type, description })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '新增书籍失败');
+        }
+
+        document.getElementById('newBookTitle').value = '';
+        document.getElementById('newBookType').value = '';
+        document.getElementById('newBookDesc').value = '';
+        showResult('bookResult', `已新增书籍：${data.book.title}`, true);
+        await refreshAll();
+      } catch (error) {
+        showResult('bookResult', error.message, false);
+      }
+    }
+
+    async function selectBook(bookKey) {
+      try {
+        const res = await fetch('/api/books/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bookKey })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '切换书籍失败');
+        }
+
+        showResult('bookResult', `已切换到：${bookKey}`, true);
+        await refreshAll();
+      } catch (error) {
+        showResult('bookResult', error.message, false);
+      }
+    }
+
+    async function deleteBook(bookKey) {
+      if (!confirm(`确认删除书籍 ${bookKey} 吗？这会删除该书本地文件和数据库记录。`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/books/${encodeURIComponent(bookKey)}`, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '删除书籍失败');
+        }
+
+        showResult('bookResult', `已删除书籍：${bookKey}`, true);
+        await refreshAll();
+      } catch (error) {
+        showResult('bookResult', error.message, false);
+      }
+    }
+
+    async function saveCurrentBook() {
+      try {
+        const title = document.getElementById('novelTitle').value.trim();
+        const type = document.getElementById('novelType').value.trim();
+        const description = document.getElementById('novelDesc').value.trim();
+
+        const res = await fetch('/api/create-novel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, type, description })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '保存失败');
+        }
+
+        showResult('currentBookResult', `当前书已保存：${data.title}`, true);
+        await refreshAll();
+      } catch (error) {
+        showResult('currentBookResult', error.message, false);
+      }
+    }
+
+    async function resetCurrentBook() {
+      if (!confirm('确认重置当前书吗？这会清空这本书的全部章节和大纲，但保留书名、类型和简介。')) {
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/reset-book', { method: 'POST' });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '重置失败');
+        }
+
+        showResult('currentBookResult', '当前书已重置。', true);
+        await refreshAll();
+      } catch (error) {
+        showResult('currentBookResult', error.message, false);
+      }
+    }
+
+    async function generateChapter(event) {
+      await runWithButton(event.currentTarget, '生成下一章', '生成中...', async () => {
+        const res = await fetch('/api/generate-chapter', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.error || '生成失败');
+        }
+        showResult('chapterResult', `已生成第 ${data.chapter.number} 章：《${data.chapter.title}》`, true);
+        await refreshAll();
+      });
+    }
+
+    async function generateChapters(count, event) {
+      await runWithButton(event.currentTarget, '连续生成 10 章', '批量生成中...', async () => {
+        const res = await fetch('/api/generate-chapters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.error || '批量生成失败');
+        }
+        showResult('chapterResult', `成功生成 ${data.count} 章。`, true);
+        await refreshAll();
+      });
+    }
+
+    async function repairData(event) {
+      await runWithButton(event.currentTarget, '修复当前书数据', '修复中...', async () => {
+        const res = await fetch('/api/repair-data', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.error || '修复失败');
+        }
+        showResult('chapterResult', `已修复 ${data.repaired} 条章节数据。`, true);
+        await refreshAll();
+      });
+    }
+
+    async function publishChapters(event) {
+      await runWithButton(event.currentTarget, '发布待发布章节', '发布中...', async () => {
+        const res = await fetch('/api/publish', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.error || '发布失败');
+        }
+        showResult('publishResult', `发布完成：成功 ${data.count} 章，失败 ${data.failed} 章。`, true);
+        await refreshAll();
+      });
+    }
+
+    async function deleteChapter(number) {
+      if (!confirm(`确认删除第 ${number} 章吗？`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/chapters/${number}`, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || '删除章节失败');
+        }
+
+        showResult('chapterResult', `已删除第 ${number} 章。`, true);
+        await refreshAll();
+      } catch (error) {
+        showResult('chapterResult', error.message, false);
+      }
+    }
+
+    async function runWithButton(button, idleText, pendingText, handler) {
+      button.disabled = true;
+      button.innerHTML = `<span class="loading"></span>${pendingText}`;
+      try {
+        await handler();
+      } catch (error) {
+        const target = button.id === 'btnPublish' ? 'publishResult' : 'chapterResult';
+        showResult(target, error.message, false);
+      } finally {
+        button.disabled = false;
+        button.textContent = idleText;
+      }
+    }
+
+    async function refreshAll() {
+      await loadBooks();
+      await loadCurrentBook();
+      await loadChapterList();
+    }
+
+    function showResult(id, message, success) {
+      const el = document.getElementById(id);
+      el.className = `result-box show ${success ? 'success' : 'error'}`;
+      el.textContent = message;
+    }
+
+    function formatNumber(num) {
+      if (num >= 10000) return `${(num / 10000).toFixed(1)}w`;
+      if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+      return String(num);
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '';
+      return new Date(dateStr).toLocaleString('zh-CN');
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(text) {
+      return String(text).replace(/'/g, "\\'");
+    }
+
+    refreshAll();
+  </script>
+</body>
+</html>

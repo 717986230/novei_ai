@@ -1,0 +1,80 @@
+<view class="container">
+  <view class="card">
+    <view class="title">发布中心</view>
+    <view class="sub-title">先看待发布，再执行发布并查看明细</view>
+  </view>
+
+  <view class="card">
+    <view class="label">待发布概览</view>
+    <view class="hint">待发布章节：{{unpublishedCount}}</view>
+    <button class="btn-primary" loading="{{publishing}}" bindtap="publishNow">发布待发布章节</button>
+    <button
+      class="btn-secondary"
+      loading="{{retrying}}"
+      disabled="{{!hasFailedItems || retrying}}"
+      bindtap="retryFailed"
+      style="margin-top: 14rpx;"
+    >
+      仅重试失败平台
+    </button>
+  </view>
+
+  <view wx:if="{{message}}" class="{{success ? 'result-success' : 'result-error'}}">
+    {{message}}
+  </view>
+
+  <view class="card">
+    <view class="label">发布结果明细</view>
+    <block wx:if="{{publishResults.length === 0}}">
+      <view class="hint">暂无发布结果，执行发布后会显示明细</view>
+    </block>
+    <block wx:for="{{publishResults}}" wx:key="chapter">
+      <view class="result-item">
+        <view class="result-title">
+          第{{item.chapter}}章 - {{item.success ? '全部成功' : '存在失败'}}
+        </view>
+        <view class="hint">成功平台 {{item.successCount || 0}} / 启用平台 {{item.enabledCount || 0}}</view>
+        <block wx:for="{{item.platformList}}" wx:key="name">
+          <view class="hint platform-line">
+            {{item.name}}：{{item.success ? '成功' : ('失败 - ' + (item.error || '未知错误'))}}
+          </view>
+        </block>
+      </view>
+    </block>
+  </view>
+
+  <view class="card">
+    <view class="label">操作历史（最近 10 条）</view>
+    <button size="mini" bindtap="clearHistory" style="margin: 10rpx 0 16rpx 0;">清空历史</button>
+    <block wx:if="{{publishHistory.length === 0}}">
+      <view class="hint">暂无历史记录</view>
+    </block>
+    <block wx:for="{{publishHistory}}" wx:key="id">
+      <view class="result-item">
+        <view class="result-title">
+          {{item.type === 'retry' ? '失败重试' : '发布操作'}} - {{item.success ? '成功' : '失败'}}
+        </view>
+        <view class="hint">{{item.operatedAtText}}</view>
+        <view class="hint" wx:if="{{item.message}}">{{item.message}}</view>
+        <block wx:for="{{item.results}}" wx:key="chapter" wx:for-item="row">
+          <view class="hint platform-line">
+            第{{row.chapter}}章：{{row.success ? '全部成功' : '存在失败'}}
+          </view>
+        </block>
+      </view>
+    </block>
+  </view>
+
+  <view class="card">
+    <view class="label">章节状态</view>
+    <block wx:if="{{chapters.length === 0}}">
+      <view class="hint">暂无章节</view>
+    </block>
+    <block wx:for="{{chapters}}" wx:key="number">
+      <view class="chapter-item">
+        <view class="chapter-title">第{{item.number}}章 {{item.title}}</view>
+        <view class="hint">{{item.published ? '已发布' : '待发布'}} | {{item.wordCount || 0}} 字</view>
+      </view>
+    </block>
+  </view>
+</view>

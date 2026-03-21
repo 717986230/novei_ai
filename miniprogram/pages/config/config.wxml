@@ -1,0 +1,58 @@
+<view class="container">
+  <view class="card">
+    <view class="title">AI 连接配置</view>
+    <view class="sub-title">先配置后端地址和 API 信息</view>
+  </view>
+
+  <view class="card">
+    <view class="field">
+      <text class="label">后端地址</text>
+      <input
+        class="input"
+        placeholder="http://127.0.0.1:3000"
+        value="{{apiBaseUrl}}"
+        bindinput="onApiBaseUrlInput"
+      />
+      <view class="hint">需指向已运行的 `node src/web.js` 服务</view>
+    </view>
+
+    <view class="field">
+      <text class="label">API 地址</text>
+      <input
+        class="input"
+        placeholder="https://api.example.com/v1/chat/completions"
+        value="{{apiUrl}}"
+        bindinput="onApiUrlInput"
+      />
+    </view>
+
+    <view class="field">
+      <text class="label">API Key</text>
+      <input
+        class="input"
+        password="true"
+        placeholder="sk-xxxx"
+        value="{{apiKey}}"
+        bindinput="onApiKeyInput"
+      />
+    </view>
+
+    <view class="field">
+      <text class="label">模型名</text>
+      <input class="input" placeholder="minimaxai/minimax-m2.5" value="{{model}}" bindinput="onModelInput" />
+    </view>
+
+    <view class="field">
+      <text class="label">代理地址（可选）</text>
+      <input class="input" placeholder="http://127.0.0.1:7890" value="{{proxyUrl}}" bindinput="onProxyUrlInput" />
+    </view>
+
+    <button class="btn-primary" loading="{{testing}}" bindtap="testConnection">测试连接</button>
+    <button class="btn-secondary" loading="{{saving}}" bindtap="saveConfig" style="margin-top: 14rpx;">保存配置</button>
+    <button bindtap="goDashboard" style="margin-top: 14rpx;">返回控制台</button>
+
+    <view wx:if="{{resultMessage}}" class="{{resultSuccess ? 'result-success' : 'result-error'}}">
+      {{resultMessage}}
+    </view>
+  </view>
+</view>
