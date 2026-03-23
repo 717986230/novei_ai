@@ -2,13 +2,10 @@ package com.novelai.backend.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.novelai.backend.model.SettingsData;
 import com.novelai.backend.model.WorkflowDto;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.stereotype.Service;
 
-import javax.sql.DataSource;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.OffsetDateTime;
@@ -20,15 +17,15 @@ import java.util.Map;
 @Service
 public class WorkflowReadService {
 
-    private final SettingsService settingsService;
+    private final JdbcSupportService jdbcSupportService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public WorkflowReadService(SettingsService settingsService) {
-        this.settingsService = settingsService;
+    public WorkflowReadService(JdbcSupportService jdbcSupportService) {
+        this.jdbcSupportService = jdbcSupportService;
     }
 
     public List<WorkflowDto> list(String bookKey) {
-        JdbcTemplate jdbcTemplate = createJdbcTemplate();
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
         if (jdbcTemplate == null) {
             return Collections.emptyList();
         }
@@ -48,7 +45,7 @@ public class WorkflowReadService {
     }
 
     public WorkflowDto get(String id) {
-        JdbcTemplate jdbcTemplate = createJdbcTemplate();
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
         if (jdbcTemplate == null) {
             return null;
         }
@@ -62,22 +59,84 @@ public class WorkflowReadService {
         return results.isEmpty() ? null : results.get(0);
     }
 
-    private JdbcTemplate createJdbcTemplate() {
-        SettingsData settings = settingsService.readSettings();
-        SettingsData.MysqlSettings mysql = settings.getMysql();
-        if (mysql == null || !Boolean.TRUE.equals(mysql.getEnabled())) {
+    public WorkflowDto findActiveWorkflow(String bookKey) {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        if (jdbcTemplate == null || bookKey == null || bookKey.isBlank()) {
             return null;
         }
 
-        String jdbcUrl = String.format(
-            "jdbc:mysql://%s:%d/%s?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai",
-            mysql.getHost(),
-            mysql.getPort(),
-            mysql.getDatabase()
+        List<WorkflowDto> results = jdbcTemplate.query(
+            "SELECT * FROM workflows WHERE book_key = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1",
+            (rs, rowNum) -> mapWorkflow(rs),
+            bookKey
         );
 
-        DataSource dataSource = new DriverManagerDataSource(jdbcUrl, mysql.getUser(), mysql.getPassword());
-        return new JdbcTemplate(dataSource);
+        return results.isEmpty() ? null : results.get(0);
+    }
+
+    public WorkflowDto saveWorkflow(WorkflowDto workflow) {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        if (jdbcTemplate == null || workflow == null || workflow.getId() == null || workflow.getId().isBlank()) {
+            return workflow;
+        }
+
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.ofHours(8));
+        OffsetDateTime createdAt = workflow.getCreatedAt() == null ? now : workflow.getCreatedAt();
+        OffsetDateTime startedAt = workflow.getStartedAt();
+        OffsetDateTime finishedAt = workflow.getFinishedAt();
+
+        jdbcTemplate.update("""
+                INSERT INTO workflows (
+                  id, book_key, type, title, status,
+                  payload_json, progress_json, result_json, error_text,
+                  created_at, started_at, finished_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  book_key = VALUES(book_key),
+                  type = VALUES(type),
+                  title = VALUES(title),
+                  status = VALUES(status),
+                  payload_json = VALUES(payload_json),
+                  progress_json = VALUES(progress_json),
+                  result_json = VALUES(result_json),
+                  error_text = VALUES(error_text),
+                  created_at = VALUES(created_at),
+                  started_at = VALUES(started_at),
+                  finished_at = VALUES(finished_at),
+                  updated_at = VALUES(updated_at)
+            """,
+            workflow.getId(),
+            value(workflow.getBookKey()),
+            value(workflow.getType()),
+            value(workflow.getTitle()),
+            value(workflow.getStatus()),
+            toJson(workflow.getPayload()),
+            toJson(workflow.getProgress()),
+            toJson(workflow.getResult()),
+            value(workflow.getError()),
+            Timestamp.from(createdAt.toInstant()),
+            startedAt == null ? null : Timestamp.from(startedAt.toInstant()),
+            finishedAt == null ? null : Timestamp.from(finishedAt.toInstant()),
+            Timestamp.from(now.toInstant())
+        );
+
+        return workflow;
+    }
+
+    public int markIncompleteWorkflowsFailed(String errorText) {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        if (jdbcTemplate == null) {
+            return 0;
+        }
+
+        return jdbcTemplate.update(
+            "UPDATE workflows SET status = 'failed', error_text = ?, finished_at = NOW(), updated_at = NOW() WHERE status IN ('pending', 'running')",
+            errorText == null || errorText.isBlank() ? "服务重启，中断了之前的任务" : errorText
+        );
+    }
+
+    private JdbcTemplate jdbcTemplate() {
+        return jdbcSupportService.getJdbcTemplate();
     }
 
     private WorkflowDto mapWorkflow(ResultSet rs) throws java.sql.SQLException {
@@ -109,11 +168,27 @@ public class WorkflowReadService {
         }
     }
 
+    private String toJson(Map<String, Object> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
         if (timestamp == null) {
             return null;
         }
 
         return timestamp.toInstant().atOffset(ZoneOffset.ofHours(8));
+    }
+
+    private String value(String input) {
+        return input == null ? "" : input;
     }
 }

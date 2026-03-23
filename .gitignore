@@ -1,7 +1,13 @@
 .env
 node_modules/
 output/
+.runtime/
 *.log
 *.stdout.log
 *.stderr.log
 config/settings.json
+.idea/
+.vscode/
+.claude/
+backend-java/target/
+backend-java/*.err

@@ -1,5 +1,7 @@
 package com.novelai.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -9,7 +11,7 @@ public class SettingsData {
     private NovelSettings novel = new NovelSettings();
     private MysqlSettings mysql = new MysqlSettings();
     private Map<String, Object> schedule = new LinkedHashMap<>();
-    private Map<String, Object> platforms = new LinkedHashMap<>();
+    private Map<String, PlatformSettings> platforms = new LinkedHashMap<>();
 
     public AiSettings getAi() {
         return ai;
@@ -43,12 +45,12 @@ public class SettingsData {
         this.schedule = schedule;
     }
 
-    public Map<String, Object> getPlatforms() {
+    public Map<String, PlatformSettings> getPlatforms() {
         return platforms;
     }
 
-    public void setPlatforms(Map<String, Object> platforms) {
-        this.platforms = platforms;
+    public void setPlatforms(Map<String, PlatformSettings> platforms) {
+        this.platforms = platforms == null ? new LinkedHashMap<>() : platforms;
     }
 
     public static class AiSettings {
@@ -264,6 +266,91 @@ public class SettingsData {
 
         public void setHasPassword(Boolean hasPassword) {
             this.hasPassword = hasPassword;
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PlatformSettings {
+        private Boolean enabled;
+        private String label;
+        private String loginMode;
+        private String username;
+        private String password;
+        private String cookies;
+        private String notes;
+        private Boolean hasPassword;
+        private Boolean hasCookies;
+
+        public Boolean getEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(Boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public void setLabel(String label) {
+            this.label = label;
+        }
+
+        public String getLoginMode() {
+            return loginMode;
+        }
+
+        public void setLoginMode(String loginMode) {
+            this.loginMode = loginMode;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getCookies() {
+            return cookies;
+        }
+
+        public void setCookies(String cookies) {
+            this.cookies = cookies;
+        }
+
+        public String getNotes() {
+            return notes;
+        }
+
+        public void setNotes(String notes) {
+            this.notes = notes;
+        }
+
+        public Boolean getHasPassword() {
+            return hasPassword;
+        }
+
+        public void setHasPassword(Boolean hasPassword) {
+            this.hasPassword = hasPassword;
+        }
+
+        public Boolean getHasCookies() {
+            return hasCookies;
+        }
+
+        public void setHasCookies(Boolean hasCookies) {
+            this.hasCookies = hasCookies;
         }
     }
 }

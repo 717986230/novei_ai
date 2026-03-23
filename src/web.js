@@ -580,7 +580,7 @@ app.post('/api/generate-chapters', async (req, res) => {
 });
 
 app.post('/api/publish', async (req, res) => {
-  const { chapterManager, publisher } = await createContext();
+  const { chapterManager, publisher, storage } = await createContext();
 
   if (!chapterManager) {
     res.json({ success: false, error: '请先选择一本书' });
@@ -594,7 +594,8 @@ app.post('/api/publish', async (req, res) => {
   }
 
   try {
-    const results = await publisher.publish(unpublished);
+    const novelInfo = storage ? await storage.getNovelInfo() : null;
+    const results = await publisher.publish(unpublished, { novelInfo });
     let successCount = 0;
 
     for (const result of results) {
