@@ -255,19 +255,46 @@ app.post('/chapters/:id/rewrite', async (c) => {
   return longJson(c, async () => ({ chapter: await p.rewriteChapter(c.req.param('id'), String(b.instruction ?? '').slice(0, 2000)) }));
 });
 
+// Paragraph-level rewrite: operate on one selected passage, return the
+// replacement text (or 3 candidates) without writing anything.
+app.post('/chapters/:id/selection', async (c) => {
+  const b = await c.req.json<{ selection?: string; mode?: string; instruction?: string }>();
+  const p = await pipelineFor(c);
+  return longJson(c, async () =>
+    p.rewriteSelection(c.req.param('id'), {
+      selection: String(b.selection ?? ''),
+      mode: b.mode as any,
+      instruction: typeof b.instruction === 'string' ? b.instruction.slice(0, 2000) : undefined,
+    }),
+  );
+});
+
+// ---- chapter version history ----
+app.get('/chapters/:id/versions', async (c) => c.json({ versions: await c.get('repo').listChapterVersions(c.req.param('id')) }));
+
+app.post('/chapters/:id/restore', async (c) => {
+  const b = await c.req.json<{ versionId?: string }>();
+  if (!b.versionId) throw new HttpError(400, 'versionId is required');
+  return c.json({ chapter: await c.get('repo').restoreChapterVersion(String(b.versionId)) });
+});
+
+// ---- persisted continuity-check issues ----
+app.get('/chapters/:id/issues', async (c) => c.json({ issues: await c.get('repo').listChapterIssues(c.req.param('id')) }));
+
 // Re-extract summary + continuity ledger (after manual edits)
 app.post('/chapters/:id/ledger', async (c) => {
   const p = await pipelineFor(c);
   return longJson(c, async () => ({ chapter: await p.refreshLedger(c.req.param('id')) }));
 });
 
-// Continuity check (read-only)
+// Continuity check: result is persisted, so leaving the page does not lose it
 app.post('/chapters/:id/check', async (c) => {
   const p = await pipelineFor(c);
-  return longJson(c, async () => ({ issues: await p.checkChapter(c.req.param('id')) }));
+  return longJson(c, async () => ({ issues: await p.checkAndSaveChapter(c.req.param('id'), 'manual') }));
 });
 
-// Fix the given continuity issues with a minimal rewrite
+// Fix the given continuity issues with a minimal rewrite, then re-check and
+// persist the fresh result so the author sees whether the fix worked
 app.post('/chapters/:id/fix', async (c) => {
   const b = await c.req.json<{ issues?: unknown }>();
   if (!Array.isArray(b.issues)) throw new HttpError(400, 'issues must be an array');
@@ -279,12 +306,17 @@ app.post('/chapters/:id/fix', async (c) => {
     fix: String(i?.fix ?? '').slice(0, 1000),
   }));
   const p = await pipelineFor(c);
-  return longJson(c, async () => ({ chapter: await p.fixChapter(c.req.param('id'), issues) }));
+  return longJson(c, async () => {
+    const chapter = await p.fixChapter(c.req.param('id'), issues);
+    return { chapter, issues: await c.get('repo').listChapterIssues(chapter.id) };
+  });
 });
 
 app.delete('/chapters/:id', async (c) => {
-  await c.get('repo').deleteChapter(c.req.param('id'));
-  return c.json({ ok: true });
+  const p = await pipelineFor(c);
+  // Deleting a middle chapter invalidates later ledgers, so the delete also
+  // cascades the ledger refresh (longJson: the cascade can take a while).
+  return longJson(c, async () => ({ ok: true, ...(await p.deleteChapter(c.req.param('id'))) }));
 });
 
 // ---- manual trigger of the daily job (same as cron) ----

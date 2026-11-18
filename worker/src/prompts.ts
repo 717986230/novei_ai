@@ -364,6 +364,72 @@ export function rewritePrompt(book: Book, chapter: Chapter, instruction: string,
   ].join('\n');
 }
 
+export type SelectionMode = 'rewrite' | 'expand' | 'shorten' | 'style' | 'variants';
+
+const SELECTION_MODE_INSTRUCTIONS: Record<Exclude<SelectionMode, 'variants'>, string> = {
+  rewrite:
+    'Rewrite ONLY the selected passage: same events, same length (within ~20%), better prose — sharper verbs, more concrete detail, truer character voice.',
+  expand:
+    'Expand ONLY the selected passage to about twice its length: deepen the scene with more dialogue exchanges, sensory detail, the POV character\'s inner reactions, and physical beats. Do not add new plot events or new characters.',
+  shorten:
+    'Condense ONLY the selected passage to about half its length: keep every plot beat and the exact ending line, cut repetition and filler.',
+  style:
+    'Rewrite ONLY the selected passage in the style the author describes below. Keep the same events and roughly the same length.',
+};
+
+/** JSON schema for the "variants" mode: 3 distinct candidate rewrites. */
+export const selectionSchema = {
+  type: 'object',
+  properties: {
+    candidates: {
+      type: 'array',
+      items: { type: 'string', description: 'One complete replacement for the selected passage, same format (blank-line paragraphs, *italics*)' },
+    },
+  },
+  required: ['candidates'],
+};
+
+/**
+ * Paragraph-level rewrite: operate on one selected passage, not the whole
+ * chapter. `contextBefore`/`contextAfter` are short slices of the surrounding
+ * text so the result joins cleanly with its neighbours.
+ */
+export function selectionPrompt(
+  book: Book,
+  chapter: Chapter,
+  selection: string,
+  mode: SelectionMode,
+  opts: { instruction?: string; contextBefore?: string; contextAfter?: string; prevState?: StoryState | null } = {},
+): string {
+  const modeLine =
+    mode === 'variants'
+      ? 'Write 3 DISTINCT versions of the selected passage (different rhythm, imagery or emphasis — not 3 near-identical copies). Same events, roughly the same length. Return them as JSON { "candidates": ["...", "...", "..."] }.'
+      : `${SELECTION_MODE_INSTRUCTIONS[mode]}${mode === 'style' && opts.instruction ? `\nRequested style: ${opts.instruction}` : ''}${
+          mode === 'rewrite' && opts.instruction ? `\nAuthor's extra direction: ${opts.instruction}` : ''
+        }`;
+  return [
+    `Revise ONE passage from chapter ${chapter.number}${chapter.title ? ` ("${chapter.title}")` : ''} of "${book.title}".`,
+    modeLine,
+    '',
+    'Rules: change ONLY the selected passage — do not touch anything outside it, do not add a chapter heading or notes, keep the same POV and tense, and keep names and continuity with the canon below.',
+    '',
+    book.bible ? bibleBlock(book.bible) : '',
+    '',
+    stateBlock(opts.prevState ?? null),
+    '',
+    opts.contextBefore ? `Text just before the passage (for tone and flow, do NOT rewrite it):\n"""\n...${opts.contextBefore}\n"""` : '',
+    '',
+    `Selected passage:\n"""\n${selection}\n"""`,
+    '',
+    opts.contextAfter ? `Text just after the passage (for tone and flow, do NOT rewrite it):\n"""\n${opts.contextAfter}...\n"""` : '',
+    '',
+    mode === 'variants' ? 'Output JSON only.' : 'Output only the replacement passage, in the same format (blank-line paragraphs, *italics*, *** scene breaks).',
+  ]
+    .filter((l) => l !== undefined)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 export function expandPrompt(book: Book, number: number, content: string, current: number): string {
   return [
     `Chapter ${number} of "${book.title}" is too short: ${current} words, but it must be about ${book.wordsPerChapter} words.`,

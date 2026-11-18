@@ -106,3 +106,38 @@ export interface Settings {
   fallbackModel: string;
   temperature: number;
 }
+
+/** One saved snapshot of a chapter's text, written before any overwrite. */
+export interface ChapterVersion {
+  id: string;
+  chapterId: string;
+  bookId: string;
+  number: number;
+  title: string;
+  content: string;
+  summary: string;
+  state: StoryState | null;
+  wordCount: number;
+  status: ChapterStatus;
+  /** generate | rewrite | edit | restore-backup */
+  reason: string;
+  createdAt: string;
+}
+
+/** One continuity-check finding, persisted so a check is not re-paid for. */
+export interface ChapterIssue {
+  id: string;
+  chapterId: string;
+  bookId: string;
+  number: number;
+  severity: 'high' | 'medium' | 'low';
+  category: string;
+  quote: string;
+  problem: string;
+  fix: string;
+  /** auto = run automatically after generation; manual = author clicked "check". */
+  source: 'auto' | 'manual';
+  fixed: boolean;
+  checkedAt: string;
+  createdAt: string;
+}

@@ -1,5 +1,5 @@
 import { HttpError } from './errors';
-import type { Book, Chapter, ChapterStatus, Settings, StoryBible, StoryState } from './types';
+import type { Book, Chapter, ChapterIssue, ChapterStatus, ChapterVersion, Settings, StoryBible, StoryState } from './types';
 
 export const now = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
@@ -50,6 +50,41 @@ function rowToChapter(r: any): Chapter {
     publishedAt: r.published_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+  };
+}
+
+function rowToChapterVersion(r: any): ChapterVersion {
+  return {
+    id: r.id,
+    chapterId: r.chapter_id,
+    bookId: r.book_id,
+    number: r.number,
+    title: r.title ?? '',
+    content: r.content ?? '',
+    summary: r.summary ?? '',
+    state: parseJson<StoryState | null>(r.state, null),
+    wordCount: r.word_count ?? 0,
+    status: r.status ?? 'draft',
+    reason: r.reason ?? 'edit',
+    createdAt: r.created_at,
+  };
+}
+
+function rowToChapterIssue(r: any): ChapterIssue {
+  return {
+    id: r.id,
+    chapterId: r.chapter_id,
+    bookId: r.book_id,
+    number: r.number,
+    severity: r.severity,
+    category: r.category ?? 'other',
+    quote: r.quote ?? '',
+    problem: r.problem ?? '',
+    fix: r.fix ?? '',
+    source: r.source === 'auto' ? 'auto' : 'manual',
+    fixed: r.fixed === 1 || r.fixed === true,
+    checkedAt: r.checked_at,
+    createdAt: r.created_at,
   };
 }
 
@@ -135,6 +170,8 @@ export class Repo {
 
   async deleteBook(id: string) {
     await this.db.batch([
+      this.db.prepare('DELETE FROM chapter_issues WHERE book_id=?').bind(id),
+      this.db.prepare('DELETE FROM chapter_versions WHERE book_id=?').bind(id),
       this.db.prepare('DELETE FROM chapters WHERE book_id=?').bind(id),
       this.db.prepare('DELETE FROM jobs WHERE book_id=?').bind(id),
       this.db.prepare('DELETE FROM books WHERE id=?').bind(id),
@@ -193,15 +230,24 @@ export class Repo {
     return this.stateBefore(bookId, Number.MAX_SAFE_INTEGER);
   }
 
-  async upsertChapter(c: {
-    bookId: string;
-    number: number;
-    title: string;
-    content: string;
-    summary: string;
-    state: StoryState | null;
-    wordCount: number;
-  }): Promise<Chapter> {
+  async upsertChapter(
+    c: {
+      bookId: string;
+      number: number;
+      title: string;
+      content: string;
+      summary: string;
+      state: StoryState | null;
+      wordCount: number;
+    },
+    opts: { reason?: string } = {},
+  ): Promise<Chapter> {
+    // Snapshot the previous text before it is overwritten, so a bad
+    // regeneration can always be undone (see chapter_versions).
+    const existing = await this.getChapterByNumber(c.bookId, c.number);
+    if (existing && (existing.content !== c.content || existing.title !== c.title)) {
+      await this.saveChapterVersion(existing, opts.reason ?? 'generate');
+    }
     const t = now();
     await this.db
       .prepare(
@@ -219,8 +265,18 @@ export class Repo {
   async updateChapter(
     id: string,
     patch: Partial<Pick<Chapter, 'title' | 'content' | 'summary' | 'status' | 'publishedUrl' | 'state'>> & { wordCount?: number },
+    opts: { reason?: string; snapshot?: boolean } = {},
   ): Promise<Chapter> {
     const current = await this.getChapter(id);
+    // Snapshot only when the author-visible text changes. Summary/state-only
+    // updates (ledger refreshes, cascades) do not snapshot, or every ledger
+    // run would flood the version history with identical text.
+    const textChanged =
+      (patch.content !== undefined && patch.content !== current.content) ||
+      (patch.title !== undefined && patch.title !== current.title);
+    if (textChanged && opts.snapshot !== false) {
+      await this.saveChapterVersion(current, opts.reason ?? 'edit');
+    }
     const sets: string[] = [];
     const vals: unknown[] = [];
     const set = (col: string, v: unknown) => {
@@ -249,8 +305,120 @@ export class Repo {
   }
 
   async deleteChapter(id: string) {
-    await this.db.prepare('DELETE FROM chapters WHERE id=?').bind(id).run();
+    await this.db.batch([
+      this.db.prepare('DELETE FROM chapter_issues WHERE chapter_id=?').bind(id),
+      this.db.prepare('DELETE FROM chapter_versions WHERE chapter_id=?').bind(id),
+      this.db.prepare('DELETE FROM chapters WHERE id=?').bind(id),
+    ]);
   }
+
+  // ---------- chapter versions ----------
+  async saveChapterVersion(chapter: Chapter, reason: string): Promise<ChapterVersion> {
+    const id = newId();
+    const t = now();
+    await this.db
+      .prepare(
+        `INSERT INTO chapter_versions (id,chapter_id,book_id,number,title,content,summary,state,word_count,status,reason,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .bind(
+        id, chapter.id, chapter.bookId, chapter.number, chapter.title, chapter.content, chapter.summary,
+        chapter.state ? JSON.stringify(chapter.state) : null, chapter.wordCount, chapter.status, reason, t,
+      )
+      .run();
+    const r = await this.db.prepare('SELECT * FROM chapter_versions WHERE id=?').bind(id).first();
+    return rowToChapterVersion(r);
+  }
+
+  async listChapterVersions(chapterId: string, limit = 20): Promise<ChapterVersion[]> {
+    const { results } = await this.db
+      .prepare('SELECT * FROM chapter_versions WHERE chapter_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?')
+      .bind(chapterId, limit)
+      .all();
+    return results.map(rowToChapterVersion);
+  }
+
+  async getChapterVersion(id: string): Promise<ChapterVersion> {
+    const r = await this.db.prepare('SELECT * FROM chapter_versions WHERE id=?').bind(id).first();
+    if (!r) throw new HttpError(404, 'Version not found');
+    return rowToChapterVersion(r);
+  }
+
+  /**
+   * Restore a chapter to a saved version. The current text is itself
+   * snapshotted first (reason 'restore-backup'), so a restore is undoable.
+   * Status / published URL are kept as-is; only the text is restored.
+   */
+  async restoreChapterVersion(versionId: string): Promise<Chapter> {
+    const version = await this.getChapterVersion(versionId);
+    const current = await this.getChapter(version.chapterId);
+    if (current.content !== version.content || current.title !== version.title) {
+      await this.saveChapterVersion(current, 'restore-backup');
+    }
+    return this.updateChapter(
+      current.id,
+      { title: version.title, content: version.content, summary: version.summary, state: version.state, wordCount: version.wordCount },
+      { snapshot: false },
+    );
+  }
+
+  // ---------- continuity-check issues (persisted) ----------
+  /**
+   * Persist a fresh check result as this chapter's canonical issue list.
+   * Matched by `problem` text: still-present issues are refreshed in place,
+   * new ones are inserted, and issues that no longer appear are marked
+   * fixed=1 instead of being deleted, so a fix can be verified afterwards.
+   */
+  async saveChapterIssues(
+    chapter: Chapter,
+    issues: { severity: 'high' | 'medium' | 'low'; category: string; quote: string; problem: string; fix: string }[],
+    source: 'auto' | 'manual',
+  ): Promise<ChapterIssue[]> {
+    const t = now();
+    const prev = (await this.listChapterIssues(chapter.id)).filter((i) => !i.fixed);
+    const seen = new Set<string>();
+    const stmts: D1PreparedStatement[] = [];
+    for (const i of issues) {
+      seen.add(i.problem);
+      const old = prev.find((p) => p.problem === i.problem);
+      if (old) {
+        stmts.push(
+          this.db
+            .prepare('UPDATE chapter_issues SET severity=?,category=?,quote=?,fix=?,source=?,checked_at=? WHERE id=?')
+            .bind(i.severity, i.category, i.quote, i.fix, source, t, old.id),
+        );
+      } else {
+        stmts.push(
+          this.db
+            .prepare(
+              `INSERT INTO chapter_issues (id,chapter_id,book_id,number,severity,category,quote,problem,fix,source,fixed,checked_at,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+            )
+            .bind(newId(), chapter.id, chapter.bookId, chapter.number, i.severity, i.category, i.quote, i.problem, i.fix, source, t, t),
+        );
+      }
+    }
+    for (const p of prev) {
+      if (!seen.has(p.problem)) {
+        stmts.push(this.db.prepare('UPDATE chapter_issues SET fixed=1 WHERE id=?').bind(p.id));
+      }
+    }
+    if (stmts.length) await this.db.batch(stmts);
+    return this.listChapterIssues(chapter.id);
+  }
+
+  async listChapterIssues(chapterId: string): Promise<ChapterIssue[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT * FROM chapter_issues WHERE chapter_id=?
+         ORDER BY checked_at DESC, fixed ASC,
+           CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`,
+      )
+      .bind(chapterId)
+      .all();
+    return results.map(rowToChapterIssue);
+  }
+
 
   // ---------- jobs (also used as a per-book lock) ----------
   async startJob(bookId: string | null, type: string, detail = ''): Promise<string> {

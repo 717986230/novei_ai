@@ -76,6 +76,8 @@ export interface StoryState {
   openThreads: string[]; facts: string[];
 }
 export interface Issue { severity: 'high' | 'medium' | 'low'; category: string; quote: string; problem: string; fix: string }
+export interface ChapterIssue extends Issue { id: string; chapterId: string; bookId: string; number: number; source: 'auto' | 'manual'; fixed: boolean; checkedAt: string; createdAt: string }
+export interface ChapterVersion { id: string; chapterId: string; bookId: string; number: number; title: string; content: string; summary: string; state: StoryState | null; wordCount: number; status: Chapter['status']; reason: string; createdAt: string }
 export interface Book {
   id: string; title: string; platform: string; language: string; genre: string; tropes: string[]; premise: string;
   pov: 'first' | 'third'; tense: 'past' | 'present'; heatLevel: 'clean' | 'sweet' | 'steamy';

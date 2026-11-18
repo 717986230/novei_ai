@@ -12,10 +12,13 @@ import {
   outlinePrompt,
   outlineSchema,
   rewritePrompt,
+  selectionPrompt,
+  selectionSchema,
   statePrompt,
   stateSchema,
   systemPrompt,
   titlePrompt,
+  type SelectionMode,
 } from './prompts';
 import type { Book, Chapter, ChapterOutline, Env, Settings, StoryBible, StoryState } from './types';
 
@@ -144,26 +147,118 @@ export class Pipeline {
         title0 ? Promise.resolve(title0) : this.makeTitle(book, number, content),
         this.makeLedger(book, number, content, state),
       ]);
-      return this.repo.upsertChapter({ bookId, number, title, content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
+      const chapter = await this.repo.upsertChapter(
+        { bookId, number, title, content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) },
+        { reason: 'generate' },
+      );
+      // Auto-check the fresh chapter (best-effort: a failed check must never
+      // fail the generation itself). High-severity issues get one fix pass
+      // and a re-check; the result is persisted, not thrown away.
+      await this.autoCheckAfterGenerate(chapter);
+      // Regenerating a middle chapter invalidates the ledgers after it.
+      await this.cascadeLedgerInner(bookId, number + 1);
+      return this.repo.getChapter(chapter.id);
     });
+  }
+
+  /**
+   * Run a continuity check on a freshly generated chapter, fix high-severity
+   * issues once, re-check, and persist the final list. Never throws: the
+   * chapter is already saved, and a failed check must not report the
+   * generation itself as failed.
+   */
+  private async autoCheckAfterGenerate(chapter: Chapter): Promise<void> {
+    try {
+      const issues = await this.checkChapter(chapter.id);
+      await this.repo.saveChapterIssues(chapter, issues, 'auto');
+      const high = issues.filter((i) => i.severity === 'high');
+      if (!high.length) return;
+      const fixed = await this.fixChapterInner(chapter, high);
+      const rechecked = await this.checkChapter(fixed.id);
+      await this.repo.saveChapterIssues(fixed, rechecked, 'auto');
+    } catch (e) {
+      console.error('auto-check failed', (e as Error).message);
+    }
   }
 
   rewriteChapter(chapterId: string, instruction: string): Promise<Chapter> {
     if (!instruction.trim()) throw new HttpError(400, 'instruction is required');
     return this.repo.getChapter(chapterId).then((chapter) =>
       this.withJob(chapter.bookId, 'rewrite', `#${chapter.number}`, async () => {
-        const book = await this.repo.getBook(chapter.bookId);
-        const prevState = await this.repo.stateBefore(book.id, chapter.number);
-        const res = await this.ai.generate({
-          system: systemPrompt(book),
-          prompt: rewritePrompt(book, chapter, instruction, prevState),
-          temperature: this.settings.temperature,
-        });
-        const content = cleanChapterText(res.text, chapter.title);
-        const ledger = await this.makeLedger(book, chapter.number, content, prevState);
-        return this.repo.updateChapter(chapterId, { content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
+        const rewritten = await this.rewriteChapterInner(chapter, instruction);
+        await this.cascadeLedgerInner(chapter.bookId, chapter.number + 1);
+        return rewritten;
       }),
     );
+  }
+
+  /** Core rewrite without the per-book job lock (callers that already hold the lock use this). */
+  private async rewriteChapterInner(chapter: Chapter, instruction: string): Promise<Chapter> {
+    const book = await this.repo.getBook(chapter.bookId);
+    const prevState = await this.repo.stateBefore(book.id, chapter.number);
+    const res = await this.ai.generate({
+      system: systemPrompt(book),
+      prompt: rewritePrompt(book, chapter, instruction, prevState),
+      temperature: this.settings.temperature,
+    });
+    const content = cleanChapterText(res.text, chapter.title);
+    const ledger = await this.makeLedger(book, chapter.number, content, prevState);
+    return this.repo.updateChapter(
+      chapter.id,
+      { content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) },
+      { reason: 'rewrite' },
+    );
+  }
+
+  /**
+   * Paragraph-level rewrite: operate on one selected passage, not the whole
+   * chapter. Returns replacement text (or 3 candidates) WITHOUT writing
+   * anything — the author applies it in the editor, then saves, which
+   * snapshots a version and can refresh the ledger as usual.
+   */
+  async rewriteSelection(
+    chapterId: string,
+    opts: { selection: string; mode: SelectionMode; instruction?: string },
+  ): Promise<{ result?: string; candidates?: string[] }> {
+    const { selection, mode } = opts;
+    if (!selection?.trim()) throw new HttpError(400, 'selection is required');
+    if (selection.length > 8000) throw new HttpError(400, 'selection is too long (max 8000 characters)');
+    if (!['rewrite', 'expand', 'shorten', 'style', 'variants'].includes(mode)) throw new HttpError(400, 'invalid mode');
+    if ((mode === 'style' || mode === 'rewrite') && opts.instruction && opts.instruction.length > 2000) {
+      throw new HttpError(400, 'instruction is too long (max 2000 characters)');
+    }
+    const chapter = await this.repo.getChapter(chapterId);
+    const at = chapter.content.indexOf(selection);
+    if (at === -1) {
+      throw new HttpError(400, 'Selection no longer matches the saved chapter text. Reload the chapter and select again.');
+    }
+    const book = await this.repo.getBook(chapter.bookId);
+    const prevState = await this.repo.stateBefore(book.id, chapter.number);
+    const promptArgs = {
+      instruction: opts.instruction,
+      contextBefore: chapter.content.slice(Math.max(0, at - 800), at),
+      contextAfter: chapter.content.slice(at + selection.length, at + selection.length + 800),
+      prevState,
+    };
+    if (mode === 'variants') {
+      const r = await this.ai.generateJson<{ candidates: string[] }>({
+        system: systemPrompt(book),
+        prompt: selectionPrompt(book, chapter, selection, mode, promptArgs),
+        responseSchema: selectionSchema,
+        temperature: this.settings.temperature,
+      });
+      const candidates = (r.candidates ?? []).map((c) => cleanChapterText(c)).filter(Boolean).slice(0, 3);
+      if (!candidates.length) throw new HttpError(502, 'Gemini returned no variants. Try again.');
+      return { candidates };
+    }
+    const res = await this.ai.generate({
+      system: systemPrompt(book),
+      prompt: selectionPrompt(book, chapter, selection, mode, promptArgs),
+      temperature: this.settings.temperature,
+    });
+    const result = cleanChapterText(res.text);
+    if (!result) throw new HttpError(502, 'Gemini returned empty text. Try again.');
+    return { result };
   }
 
   /** One expansion pass when the model under-delivers on length (common with lite/fallback models). */
@@ -180,24 +275,69 @@ export class Pipeline {
     }
   }
 
-  /** Summary + continuity ledger as of the end of this chapter. */
+  /**
+   * Summary + continuity ledger as of the end of this chapter. The fresh
+   * ledger is MERGED with the previous one (see mergeStates) instead of
+   * replacing it, so one thin chapter cannot silently drop established
+   * facts or characters from the book's memory.
+   */
   async makeLedger(book: Book, number: number, content: string, prevState: StoryState | null): Promise<{ summary: string; state: StoryState }> {
     const r = await this.ai.generateJson<{ summary: string; state: StoryState }>({
       prompt: statePrompt(book, number, content, prevState),
       responseSchema: stateSchema,
       temperature: 0.2,
     });
-    return { summary: String(r.summary ?? '').trim(), state: normaliseState(r.state) };
+    return { summary: String(r.summary ?? '').trim(), state: mergeStates(prevState, r.state) };
   }
 
-  /** Re-extract the ledger for a chapter (e.g. after manual edits). */
+  /** Re-extract the ledger for a chapter (e.g. after manual edits), then cascade to later chapters. */
   refreshLedger(chapterId: string): Promise<Chapter> {
     return this.repo.getChapter(chapterId).then((chapter) =>
       this.withJob(chapter.bookId, 'ledger', `#${chapter.number}`, async () => {
         const book = await this.repo.getBook(chapter.bookId);
         const prevState = await this.repo.stateBefore(book.id, chapter.number);
         const ledger = await this.makeLedger(book, chapter.number, chapter.content, prevState);
-        return this.repo.updateChapter(chapterId, { summary: ledger.summary, state: ledger.state });
+        const updated = await this.repo.updateChapter(chapterId, { summary: ledger.summary, state: ledger.state });
+        await this.cascadeLedgerInner(chapter.bookId, chapter.number + 1);
+        return updated;
+      }),
+    );
+  }
+
+  /**
+   * Re-extract the ledgers of every chapter from `fromNumber` onwards, in
+   * order, so each one builds on the refreshed state of its predecessor.
+   * Job-free: callers already hold the per-book lock. Best-effort — stops
+   * at the first failure and returns how many chapters were refreshed, so a
+   * single bad chapter does not block the rest of the book forever.
+   */
+  private async cascadeLedgerInner(bookId: string, fromNumber: number): Promise<number> {
+    const later = (await this.repo.listChapters(bookId)).filter((c) => c.number >= fromNumber);
+    let done = 0;
+    for (const ch of later) {
+      try {
+        const book = await this.repo.getBook(bookId);
+        const prevState = await this.repo.stateBefore(bookId, ch.number);
+        const ledger = await this.makeLedger(book, ch.number, ch.content, prevState);
+        // Summary/state-only update: updateChapter does not snapshot these
+        // (no text change), so a cascade never floods the version history.
+        await this.repo.updateChapter(ch.id, { summary: ledger.summary, state: ledger.state });
+        done++;
+      } catch (e) {
+        console.error(`ledger cascade stopped at chapter ${ch.number}`, (e as Error).message);
+        break;
+      }
+    }
+    return done;
+  }
+
+  /** Delete a chapter, then refresh the ledgers of the chapters after it. */
+  deleteChapter(chapterId: string): Promise<{ cascaded: number }> {
+    return this.repo.getChapter(chapterId).then((chapter) =>
+      this.withJob(chapter.bookId, 'delete-chapter', `#${chapter.number}`, async () => {
+        await this.repo.deleteChapter(chapterId);
+        const cascaded = await this.cascadeLedgerInner(chapter.bookId, chapter.number);
+        return { cascaded };
       }),
     );
   }
@@ -218,14 +358,37 @@ export class Pipeline {
     return (r.issues ?? []).filter((i) => i && i.problem);
   }
 
+  /** Check a chapter and persist the result, so it survives leaving the page. */
+  async checkAndSaveChapter(chapterId: string, source: 'auto' | 'manual'): Promise<ContinuityIssue[]> {
+    const issues = await this.checkChapter(chapterId);
+    const chapter = await this.repo.getChapter(chapterId);
+    await this.repo.saveChapterIssues(chapter, issues, source);
+    return issues;
+  }
+
   /** Rewrite the chapter fixing the given issues (minimal edits). */
   fixChapter(chapterId: string, issues: ContinuityIssue[]): Promise<Chapter> {
     if (!issues.length) throw new HttpError(400, 'No issues to fix');
+    return this.repo.getChapter(chapterId).then((chapter) =>
+      this.withJob(chapter.bookId, 'fix', `#${chapter.number}`, async () => {
+        const fixed = await this.fixChapterInner(chapter, issues);
+        // Re-check after the fix and persist: the author should see whether
+        // the fix actually worked, without paying for another manual check.
+        const rechecked = await this.checkChapter(fixed.id);
+        await this.repo.saveChapterIssues(fixed, rechecked, 'manual');
+        await this.cascadeLedgerInner(chapter.bookId, chapter.number + 1);
+        return fixed;
+      }),
+    );
+  }
+
+  /** Core fix without the per-book job lock (callers that already hold the lock use this). */
+  private async fixChapterInner(chapter: Chapter, issues: ContinuityIssue[]): Promise<Chapter> {
     const instruction = [
       'Fix ONLY these continuity errors with minimal changes; keep everything else (wording, events, length) as is:',
       ...issues.map((i, n) => `${n + 1}. At "${i.quote}": ${i.problem} -> ${i.fix}`),
     ].join('\n');
-    return this.rewriteChapter(chapterId, instruction);
+    return this.rewriteChapterInner(chapter, instruction);
   }
 
   private async makeTitle(book: Book, number: number, content: string): Promise<string> {
@@ -245,6 +408,50 @@ export function normaliseState(s: Partial<StoryState> | undefined): StoryState {
       .map((c: any) => ({ name: str(c.name), status: str(c.status), location: str(c.location), knowledge: str(c.knowledge), relationships: str(c.relationships) })),
     openThreads: list(s?.openThreads).slice(0, 30),
     facts: [...new Set(list(s?.facts))].slice(0, 60),
+  };
+}
+
+/**
+ * Merge a freshly extracted ledger (`next`) into the previous one (`prev`).
+ * The old code replaced the ledger wholesale, so one thin chapter could
+ * silently drop established facts or characters from the book's memory.
+ *
+ * - facts: union, new first, de-duplicated (a fact once established stays
+ *   canon unless the author explicitly retcons it by hand-editing the ledger).
+ * - characters: merged by name; a non-empty new field wins, an empty one
+ *   keeps the old value.
+ * - time/location: new value wins when non-empty, else the old one.
+ * - openThreads: the new list wins — it is the only list that can know a
+ *   thread was resolved in this chapter. Only when the model returns no
+ *   threads at all do we keep the old list (that is almost always a model
+ *   miss, not a mass resolution).
+ */
+export function mergeStates(prev: StoryState | null, next: Partial<StoryState> | undefined): StoryState {
+  const n = normaliseState(next);
+  if (!prev) return n;
+  const characters = new Map<string, StoryState['characters'][number]>();
+  for (const c of prev.characters) characters.set(c.name, { ...c });
+  for (const c of n.characters) {
+    const old = characters.get(c.name);
+    characters.set(
+      c.name,
+      old
+        ? {
+            name: c.name,
+            status: c.status || old.status,
+            location: c.location || old.location,
+            knowledge: c.knowledge || old.knowledge,
+            relationships: c.relationships || old.relationships,
+          }
+        : c,
+    );
+  }
+  return {
+    time: n.time || prev.time,
+    location: n.location || prev.location,
+    characters: [...characters.values()],
+    openThreads: n.openThreads.length ? n.openThreads : prev.openThreads,
+    facts: [...new Set([...n.facts, ...prev.facts])].slice(0, 60),
   };
 }
 
