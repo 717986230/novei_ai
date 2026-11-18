@@ -1,13 +1,6 @@
-.env
 node_modules/
-output/
-.runtime/
+web/dist/
+.wrangler/
+.dev.vars
 *.log
-*.stdout.log
-*.stderr.log
-config/settings.json
-.idea/
-.vscode/
-.claude/
-backend-java/target/
-backend-java/*.err
+.DS_Store

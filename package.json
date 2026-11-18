@@ -1,32 +1,32 @@
 {
-  "name": "novel-ai-publisher",
-  "version": "1.0.0",
-  "description": "自动写小说并发布到多平台",
-  "main": "src/index.js",
+  "name": "novel-ai-global",
+  "version": "2.0.0",
+  "private": true,
+  "description": "AI web-novel studio for overseas platforms (Stary Writing/Dreame, Webnovel, Royal Road, Wattpad). Cloudflare Workers + D1 + Gemini.",
+  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "web": "node src/web.js",
-    "test": "node src/index.js --test",
-    "generate": "node src/index.js --generate",
-    "publish": "node src/index.js --publish"
+    "dev": "npm run build:web && wrangler dev",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "db:migrate:local": "wrangler d1 migrations apply novel_ai --local",
+    "db:migrate:remote": "wrangler d1 migrations apply novel_ai --remote",
+    "deploy": "npm run build:web && wrangler deploy",
+    "typecheck": "tsc -p worker/tsconfig.json --noEmit && vue-tsc -p web/tsconfig.json --noEmit",
+    "test": "vitest run"
   },
-  "keywords": [
-    "novel",
-    "ai",
-    "automation",
-    "publish"
-  ],
-  "author": "",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "dotenv": "^16.3.1",
-    "express": "^5.2.1",
-    "fs-extra": "^11.2.0",
-    "inquirer": "^9.2.12",
-    "mysql2": "^3.20.0",
-    "node-cron": "^3.0.3",
-    "playwright": "^1.40.0",
-    "puppeteer": "^21.6.0"
+    "hono": "^4.13.19"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261117.1",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "vue": "^3.5.45",
+    "vue-router": "^5.5.1",
+    "vue-tsc": "^3.3.14",
+    "wrangler": "^4.164.0"
   }
 }
