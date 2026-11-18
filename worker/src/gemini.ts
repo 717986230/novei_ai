@@ -51,12 +51,14 @@ export class GeminiClient {
     return this.opts.model;
   }
 
-  buildBody(req: GenerateRequest) {
+  buildBody(req: GenerateRequest, model = this.opts.model) {
     const generationConfig: Record<string, unknown> = {
-      temperature: req.temperature ?? 0.9,
       // Thinking models count reasoning tokens against this budget, so keep it generous.
       maxOutputTokens: req.maxOutputTokens ?? 16384,
     };
+    // Google: for Gemini 3 keep temperature/top_p/top_k at their defaults; values below 1.0
+    // can cause looping and degraded output. Only older models get an explicit temperature.
+    if (!usesDefaultSampling(model) && req.temperature !== undefined) generationConfig.temperature = req.temperature;
     if (req.responseSchema) {
       generationConfig.responseMimeType = 'application/json';
       generationConfig.responseSchema = req.responseSchema;
@@ -98,7 +100,7 @@ export class GeminiClient {
   private async generateWith(model: string, req: GenerateRequest): Promise<GenerateResult> {
     // Streaming (SSE): response headers come with the first chunk instead of after the whole chapter.
     const url = `${this.base}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
-    const body = JSON.stringify(this.buildBody(req));
+    const body = JSON.stringify(this.buildBody(req, model));
     const hasFallback = (this.opts.fallbackModels ?? []).some((m) => m !== model);
     // With a fallback available, give up on an overloaded model quickly.
     const maxRetries = hasFallback ? Math.min(1, this.opts.maxRetries ?? 3) : (this.opts.maxRetries ?? 3);
@@ -235,6 +237,12 @@ export function mergeChunks(chunks: any[]): any {
     usageMetadata,
     candidates: parts.length || finishReason ? [{ content: { parts }, finishReason }] : [],
   };
+}
+
+/** Gemini 3.x and later: leave sampling parameters at their defaults (per Google's prompting guide). */
+export function usesDefaultSampling(model: string): boolean {
+  const m = /^gemini-(\d+)/.exec(model);
+  return !!m && Number(m[1]) >= 3;
 }
 
 export function parseResponse(data: any): GenerateResult {

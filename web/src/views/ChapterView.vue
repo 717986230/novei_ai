@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import { countWords } from '../../../worker/src/format';
 import { api, loadPlatforms, STATUS_LABEL, type Book, type Chapter, type Issue, type Platform } from '../api';
 import StateView from '../components/StateView.vue';
+import QcPanel from '../components/QcPanel.vue';
 import { copyChapter } from '../clipboard';
 import { toast } from '../toast';
 
@@ -106,6 +107,7 @@ const regenerate = () =>
   aiAction('重新生成本章', () =>
     api(`/books/${chapter.value!.bookId}/chapters/generate`, { body: { number: chapter.value!.number, instruction: instruction.value || undefined } }),
   );
+const runQc = () => aiAction('自动质检（去 AI 味 + 一致性检查 + 修正，约 2–5 分钟）', () => api(`/chapters/${props.id}/qc`, { method: 'POST' }));
 const refreshLedger = () => aiAction('更新摘要与账本', () => api(`/chapters/${props.id}/ledger`, { method: 'POST' }));
 
 async function check() {
@@ -198,7 +200,16 @@ async function remove() {
 
     <div class="card">
       <div class="row between">
-        <h2 style="margin: 0">一致性检查</h2>
+        <h2 style="margin: 0">自动质检</h2>
+        <button :disabled="!!busy || chapter.status === 'published'" @click="runQc">重新质检</button>
+      </div>
+      <QcPanel :qc="chapter.qc" style="margin-top: 8px" />
+      <p v-if="chapter.status === 'published'" class="small muted">已发布的章节不会被自动改动。</p>
+    </div>
+
+    <div class="card">
+      <div class="row between">
+        <h2 style="margin: 0">一致性检查（手动）</h2>
         <button class="primary" :disabled="!!busy" @click="check">检查本章</button>
       </div>
       <p class="small muted">对照人物卡、世界规则、前情和连续性账本，找出人名/外貌/口吻/谁知道什么/时间地点/伤势道具/伏笔等矛盾。</p>

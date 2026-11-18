@@ -15,6 +15,7 @@ const model = ref('');
 const custom = ref('');
 const temperature = ref(0.9);
 const fallback = ref('gemini-3.5-flash-lite');
+const autoQc = ref(true);
 const test = ref<{ ok?: boolean; reply?: string; ms?: number; model?: string; fellBack?: boolean; error?: string } | null>(null);
 const testing = ref(false);
 const error = ref('');
@@ -24,8 +25,9 @@ const router = useRouter();
 
 onMounted(async () => {
   try {
-    const s = await api<{ model: string; fallbackModel: string; temperature: number }>('/settings');
+    const s = await api<{ model: string; fallbackModel: string; temperature: number; autoQc: boolean }>('/settings');
     temperature.value = s.temperature;
+    autoQc.value = s.autoQc;
     fallback.value = s.fallbackModel;
     if (MODELS.some((m) => m.id === s.model)) model.value = s.model;
     else { model.value = 'custom'; custom.value = s.model; }
@@ -37,7 +39,7 @@ onMounted(async () => {
 async function save() {
   error.value = '';
   try {
-    await api('/settings', { method: 'PUT', body: { model: model.value === 'custom' ? custom.value.trim() : model.value, fallbackModel: fallback.value, temperature: temperature.value } });
+    await api('/settings', { method: 'PUT', body: { model: model.value === 'custom' ? custom.value.trim() : model.value, fallbackModel: fallback.value, temperature: temperature.value, autoQc: autoQc.value } });
     toast('已保存');
   } catch (e) {
     error.value = (e as Error).message;
@@ -93,7 +95,8 @@ function logout() {
         <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
       </select>
     </label>
-    <label>创造性（temperature）：{{ temperature.toFixed(2) }}
+    <label class="row" style="color: var(--text)"><input v-model="autoQc" type="checkbox" style="width: auto" /> 每章生成后自动质检（去 AI 味 + 一致性检查 + 自动修正）</label>
+    <label>创造性（temperature，仅对 Gemini 2.x 等旧模型生效；Gemini 3 按 Google 建议使用默认值）：{{ temperature.toFixed(2) }}
       <input v-model.number="temperature" type="range" min="0" max="1.5" step="0.05" />
     </label>
     <p class="small muted">API Key 存放在 Cloudflare 机密变量 <code>GEMINI_API_KEY</code> 中，不经过浏览器。</p>

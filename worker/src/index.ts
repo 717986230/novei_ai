@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { analyseAiTells } from './aitells';
 import { Repo } from './db';
 import { HttpError } from './errors';
 import { countWords, exportBook, type ExportFormat } from './format';
@@ -79,8 +80,9 @@ app.get('/platforms', (c) => c.json({ platforms: Object.values(PLATFORMS), langu
 
 app.get('/settings', async (c) => c.json(await loadSettings(c.env, c.get('repo'))));
 app.put('/settings', async (c) => {
-  const b = await c.req.json<{ model?: string; fallbackModel?: string; temperature?: number }>();
+  const b = await c.req.json<{ model?: string; fallbackModel?: string; temperature?: number; autoQc?: boolean }>();
   const patch: Record<string, unknown> = {};
+  if (b.autoQc !== undefined) patch.autoQc = !!b.autoQc;
   if (b.model !== undefined) {
     if (!/^[\w.\-]+$/.test(b.model)) throw new HttpError(400, 'Invalid model id');
     patch.model = b.model;
@@ -259,6 +261,18 @@ app.post('/chapters/:id/rewrite', async (c) => {
 app.post('/chapters/:id/ledger', async (c) => {
   const p = await pipelineFor(c);
   return longJson(c, async () => ({ chapter: await p.refreshLedger(c.req.param('id')) }));
+});
+
+// Full automatic QC on an existing chapter: AI-flavour line edit + continuity check/fix
+app.post('/chapters/:id/qc', async (c) => {
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ chapter: await p.qcChapter(c.req.param('id')) }));
+});
+
+// AI-flavour scan only (instant, no AI call)
+app.get('/chapters/:id/ai-tells', async (c) => {
+  const ch = await c.get('repo').getChapter(c.req.param('id'));
+  return c.json({ report: analyseAiTells(ch.content) });
 });
 
 // Continuity check (read-only)

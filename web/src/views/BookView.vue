@@ -194,7 +194,8 @@ const fmtTime = (s: string) => new Date(s).toLocaleString();
           <li v-for="c in chapters" :key="c.id" class="row between">
             <RouterLink :to="`/chapters/${c.id}`" style="flex: 1; min-width: 0; color: inherit">
               <div><strong>{{ c.number }}.</strong> {{ c.title || '(无标题)' }}</div>
-              <div class="muted small">{{ c.wordCount.toLocaleString() }} 词 · <span :class="['badge', c.status]">{{ STATUS_LABEL[c.status] }}</span></div>
+              <div class="muted small">{{ c.wordCount.toLocaleString() }} 词 · <span :class="['badge', c.status]">{{ STATUS_LABEL[c.status] }}</span>
+                <span v-if="c.qc" :class="c.qc.verdict === 'passed' ? 'ok' : 'warn'"> · {{ c.qc.verdict === 'passed' ? '质检✓' : '待人工看' }} · AI味 {{ c.qc.aiScoreAfter }}</span></div>
             </RouterLink>
             <button class="small" @click="quickCopy(c)">复制</button>
           </li>
@@ -289,7 +290,7 @@ const fmtTime = (s: string) => new Date(s).toLocaleString();
       </form>
       <div class="card">
         <h2>每日自动更新</h2>
-        <p class="small muted">Cloudflare 定时任务每天（UTC 06:17，维也纳时间 07:17/08:17）自动续写，生成后为草稿，需你审核发布。</p>
+        <p class="small muted">Cloudflare 定时任务每天（UTC 06:17，维也纳时间 07:17/08:17）自动续写并自动质检：通过的标为“待发布”，有问题的留在草稿等你看。发布仍由你决定。</p>
         <div class="row">
           <button v-for="n in [0, 1, 2, 3, 5]" :key="n" :class="{ primary: book.autoDaily === n }" @click="setAuto(n)">{{ n ? `${n} 章/天` : '关闭' }}</button>
         </div>

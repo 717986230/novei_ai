@@ -27,6 +27,13 @@ describe('GeminiClient', () => {
     expect(body.generationConfig.responseMimeType).toBe('application/json');
   });
 
+  it('omits temperature for Gemini 3+ but keeps it for older models', () => {
+    const c3 = new GeminiClient({ apiKey: 'k', model: 'gemini-3.8-flash' });
+    expect(c3.buildBody({ prompt: 'x', temperature: 0.2 }).generationConfig).not.toHaveProperty('temperature');
+    const c2 = new GeminiClient({ apiKey: 'k', model: 'gemini-2.5-flash' });
+    expect((c2.buildBody({ prompt: 'x', temperature: 0.2 }).generationConfig as any).temperature).toBe(0.2);
+  });
+
   it('retries 503 then succeeds; does not retry 400', async () => {
     let n = 0;
     const c = new GeminiClient({ apiKey: 'k', model: 'm', backoffMs: 0, fetchImpl: (async () => (++n < 3 ? new Response('busy', { status: 503 }) : ok('hi'))) as any });

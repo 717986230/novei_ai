@@ -1,4 +1,5 @@
-import { Repo } from './db';
+import { aiReportToInstructions, analyseAiTells } from './aitells';
+import { Repo, now } from './db';
 import { HttpError } from './errors';
 import { cleanChapterText, cleanTitle, countWords } from './format';
 import { GeminiClient } from './gemini';
@@ -7,6 +8,7 @@ import {
   biblePrompt,
   chapterPrompt,
   checkPrompt,
+  deAiPrompt,
   expandPrompt,
   checkSchema,
   outlinePrompt,
@@ -17,15 +19,10 @@ import {
   systemPrompt,
   titlePrompt,
 } from './prompts';
-import type { Book, Chapter, ChapterOutline, Env, Settings, StoryBible, StoryState } from './types';
+import type { Book, Chapter, ChapterOutline, Env, QcReport, Settings, StoryBible, StoryState } from './types';
 
-export interface ContinuityIssue {
-  severity: 'high' | 'medium' | 'low';
-  category: string;
-  quote: string;
-  problem: string;
-  fix: string;
-}
+export type { QcIssue as ContinuityIssue } from './types';
+import type { QcIssue as ContinuityIssue } from './types';
 
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_FALLBACK = 'gemini-3.5-flash-lite';
@@ -34,7 +31,7 @@ const SUMMARY_WINDOW = 12;
 const TAIL_CHARS = 1800;
 
 export async function loadSettings(env: Env, repo: Repo): Promise<Settings> {
-  return repo.getSettings({ model: env.GEMINI_MODEL || DEFAULT_MODEL, fallbackModel: DEFAULT_FALLBACK, temperature: 0.9 });
+  return repo.getSettings({ autoQc: true, model: env.GEMINI_MODEL || DEFAULT_MODEL, fallbackModel: DEFAULT_FALLBACK, temperature: 0.9 });
 }
 
 export function makeClient(env: Env, settings: Settings, fetchImpl?: typeof fetch) {
@@ -139,13 +136,133 @@ export class Pipeline {
       let content = cleanChapterText(res.text, title0);
       if (countWords(content) < 200) throw new HttpError(502, `Gemini returned a very short chapter (finishReason=${res.finishReason}). Try again.`);
       content = await this.expandIfShort(book, number, content);
+      const aiScoreRaw = analyseAiTells(content).score;
+      const deAi = this.settings.autoQc ? await this.deAi(book, number, content) : null;
+      if (deAi) content = deAi.content;
 
       const [title, ledger] = await Promise.all([
         title0 ? Promise.resolve(title0) : this.makeTitle(book, number, content),
         this.makeLedger(book, number, content, state),
       ]);
-      return this.repo.upsertChapter({ bookId, number, title, content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
+      const saved = await this.repo.upsertChapter({ bookId, number, title, content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
+      if (!this.settings.autoQc) return saved;
+      return this.qcInner(book, saved, { aiScoreBefore: aiScoreRaw, aiEditApplied: !!deAi?.applied });
     });
+  }
+
+  /** Run the full QC pass on an existing chapter (manual trigger from the UI). */
+  qcChapter(chapterId: string): Promise<Chapter> {
+    return this.repo.getChapter(chapterId).then((chapter) =>
+      this.withJob(chapter.bookId, 'qc', `#${chapter.number}`, async () => {
+        const book = await this.repo.getBook(chapter.bookId);
+        const before = analyseAiTells(chapter.content).score;
+        const deAi = await this.deAi(book, chapter.number, chapter.content);
+        let current = chapter;
+        if (deAi.applied) {
+          const prevState = await this.repo.stateBefore(book.id, chapter.number);
+          const ledger = await this.makeLedger(book, chapter.number, deAi.content, prevState);
+          current = await this.repo.updateChapter(chapter.id, { content: deAi.content, summary: ledger.summary, state: ledger.state, wordCount: countWords(deAi.content) });
+        }
+        return this.qcInner(book, current, { aiScoreBefore: before, aiEditApplied: deAi.applied });
+      }),
+    );
+  }
+
+  /**
+   * Line edit that removes AI tells, only when the scan says it's needed.
+   * Rejected if the edit changes length by more than 15% (a sign it rewrote the plot or truncated).
+   */
+  private async deAi(book: Book, number: number, content: string): Promise<{ content: string; applied: boolean }> {
+    const report = analyseAiTells(content);
+    if (!report.needsEdit) return { content, applied: false };
+    try {
+      const r = await this.ai.generate({
+        system: systemPrompt(book),
+        prompt: deAiPrompt(book, number, content, aiReportToInstructions(report)),
+        temperature: 0.6,
+      });
+      const edited = cleanChapterText(r.text);
+      const w0 = countWords(content);
+      const w1 = countWords(edited);
+      const better = analyseAiTells(edited).score < report.score;
+      if (w1 >= w0 * 0.85 && w1 <= w0 * 1.15 && better) return { content: edited, applied: true };
+    } catch {
+      /* keep original */
+    }
+    return { content, applied: false };
+  }
+
+  /** Continuity check -> minimal fix of high/medium issues -> re-check -> verdict. */
+  private async qcInner(book: Book, chapter: Chapter, ai: { aiScoreBefore: number; aiEditApplied: boolean }): Promise<Chapter> {
+    const notes: string[] = [];
+    let current = chapter;
+    let found: ContinuityIssue[] = [];
+    let remaining: ContinuityIssue[] = [];
+    let fixed = 0;
+    try {
+      found = await this.checkInner(book, current);
+      const serious = found.filter((i) => i.severity !== 'low');
+      if (serious.length) {
+        current = await this.rewriteInner(book, current, fixInstruction(serious));
+        remaining = (await this.checkInner(book, current)).filter((i) => i.severity !== 'low');
+        fixed = Math.max(0, serious.length - remaining.length);
+        if (analyseAiTells(current.content).needsEdit) notes.push('Continuity fix reintroduced some AI tells; consider a manual pass.');
+      } else {
+        remaining = [];
+      }
+    } catch (e) {
+      notes.push(`Continuity check failed: ${(e as Error).message}`);
+      remaining = found.filter((i) => i.severity !== 'low');
+    }
+    const aiAfter = analyseAiTells(current.content);
+    const wordsOk = current.wordCount >= book.wordsPerChapter * 0.75;
+    if (!wordsOk) notes.push(`Chapter is short (${current.wordCount} of ~${book.wordsPerChapter} words).`);
+    const passed = !remaining.some((i) => i.severity === 'high') && aiAfter.score < 8 && wordsOk && !notes.some((n) => n.startsWith('Continuity check failed'));
+    const qc: QcReport = {
+      ranAt: now(),
+      aiScoreBefore: ai.aiScoreBefore,
+      aiScoreAfter: aiAfter.score,
+      aiEditApplied: ai.aiEditApplied,
+      aiTells: [
+        ...aiAfter.violations.map((v) => `${v.label} ×${v.count}`),
+        ...(aiAfter.emDashes > aiAfter.emDashLimit ? [`em dashes ×${aiAfter.emDashes}`] : []),
+        ...aiAfter.repeatedDescriptors.map((d) => `${d.phrase} ×${d.count}`),
+      ].slice(0, 12),
+      issuesFound: found,
+      issuesFixed: fixed,
+      remaining,
+      verdict: passed ? 'passed' : 'needs_review',
+      notes,
+    };
+    // Passed chapters become "ready" (awaiting the author's go-ahead); never touch published ones.
+    const status = current.status === 'published' ? undefined : passed ? 'ready' : 'draft';
+    return this.repo.updateChapter(current.id, { qc, ...(status ? { status } : {}) });
+  }
+
+  private async checkInner(book: Book, chapter: Chapter): Promise<ContinuityIssue[]> {
+    const [prevState, previous] = await Promise.all([
+      this.repo.stateBefore(book.id, chapter.number),
+      this.repo.previousSummaries(book.id, chapter.number, SUMMARY_WINDOW),
+    ]);
+    const r = await this.ai.generateJson<{ issues: ContinuityIssue[] }>({
+      prompt: checkPrompt(book, chapter, prevState, previous),
+      responseSchema: checkSchema,
+      temperature: 0.1,
+    });
+    return (r.issues ?? []).filter((i) => i && i.problem);
+  }
+
+  private async rewriteInner(book: Book, chapter: Chapter, instruction: string): Promise<Chapter> {
+    const prevState = await this.repo.stateBefore(book.id, chapter.number);
+    const res = await this.ai.generate({
+      system: systemPrompt(book),
+      prompt: rewritePrompt(book, chapter, instruction, prevState),
+      temperature: this.settings.temperature,
+    });
+    const content = cleanChapterText(res.text, chapter.title);
+    if (countWords(content) < countWords(chapter.content) * 0.7) throw new HttpError(502, 'Rewrite came back much shorter than the original; kept the original.');
+    const ledger = await this.makeLedger(book, chapter.number, content, prevState);
+    return this.repo.updateChapter(chapter.id, { content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
   }
 
   rewriteChapter(chapterId: string, instruction: string): Promise<Chapter> {
@@ -153,31 +270,27 @@ export class Pipeline {
     return this.repo.getChapter(chapterId).then((chapter) =>
       this.withJob(chapter.bookId, 'rewrite', `#${chapter.number}`, async () => {
         const book = await this.repo.getBook(chapter.bookId);
-        const prevState = await this.repo.stateBefore(book.id, chapter.number);
-        const res = await this.ai.generate({
-          system: systemPrompt(book),
-          prompt: rewritePrompt(book, chapter, instruction, prevState),
-          temperature: this.settings.temperature,
-        });
-        const content = cleanChapterText(res.text, chapter.title);
-        const ledger = await this.makeLedger(book, chapter.number, content, prevState);
-        return this.repo.updateChapter(chapterId, { content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
+        return this.rewriteInner(book, chapter, instruction);
       }),
     );
   }
 
-  /** One expansion pass when the model under-delivers on length (common with lite/fallback models). */
+  /** Up to two expansion passes; fallback/lite models often under-deliver on length. */
   private async expandIfShort(book: Book, number: number, content: string): Promise<string> {
-    const words = countWords(content);
-    if (words >= book.wordsPerChapter * 0.8) return content;
-    try {
-      const r = await this.ai.generate({ system: systemPrompt(book), prompt: expandPrompt(book, number, content, words), temperature: this.settings.temperature });
-      const expanded = cleanChapterText(r.text);
-      // Accept only if it really got longer.
-      return countWords(expanded) > words * 1.15 ? expanded : content;
-    } catch {
-      return content;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const words = countWords(content);
+      if (words >= book.wordsPerChapter * 0.8) break;
+      try {
+        const r = await this.ai.generate({ system: systemPrompt(book), prompt: expandPrompt(book, number, content, words), temperature: this.settings.temperature });
+        const expanded = cleanChapterText(r.text);
+        // Accept only real growth that doesn't make the prose more AI-sounding.
+        if (countWords(expanded) > words * 1.1 && analyseAiTells(expanded).score <= analyseAiTells(content).score + 3) content = expanded;
+        else break;
+      } catch {
+        break;
+      }
     }
+    return content;
   }
 
   /** Summary + continuity ledger as of the end of this chapter. */
@@ -206,32 +319,26 @@ export class Pipeline {
   async checkChapter(chapterId: string): Promise<ContinuityIssue[]> {
     const chapter = await this.repo.getChapter(chapterId);
     const book = await this.repo.getBook(chapter.bookId);
-    const [prevState, previous] = await Promise.all([
-      this.repo.stateBefore(book.id, chapter.number),
-      this.repo.previousSummaries(book.id, chapter.number, SUMMARY_WINDOW),
-    ]);
-    const r = await this.ai.generateJson<{ issues: ContinuityIssue[] }>({
-      prompt: checkPrompt(book, chapter, prevState, previous),
-      responseSchema: checkSchema,
-      temperature: 0.1,
-    });
-    return (r.issues ?? []).filter((i) => i && i.problem);
+    return this.checkInner(book, chapter);
   }
 
   /** Rewrite the chapter fixing the given issues (minimal edits). */
   fixChapter(chapterId: string, issues: ContinuityIssue[]): Promise<Chapter> {
     if (!issues.length) throw new HttpError(400, 'No issues to fix');
-    const instruction = [
-      'Fix ONLY these continuity errors with minimal changes; keep everything else (wording, events, length) as is:',
-      ...issues.map((i, n) => `${n + 1}. At "${i.quote}": ${i.problem} -> ${i.fix}`),
-    ].join('\n');
-    return this.rewriteChapter(chapterId, instruction);
+    return this.rewriteChapter(chapterId, fixInstruction(issues));
   }
 
   private async makeTitle(book: Book, number: number, content: string): Promise<string> {
     const r = await this.ai.generate({ prompt: titlePrompt(book, number, content), temperature: 0.8, maxOutputTokens: 2048 });
     return cleanTitle(r.text);
   }
+}
+
+export function fixInstruction(issues: ContinuityIssue[]): string {
+  return [
+    'Fix ONLY these continuity errors with minimal changes; keep everything else (wording, events, length) as is:',
+    ...issues.map((i, n) => `${n + 1}. At "${i.quote}": ${i.problem} -> ${i.fix}`),
+  ].join('\n');
 }
 
 export function normaliseState(s: Partial<StoryState> | undefined): StoryState {
@@ -263,7 +370,8 @@ export function normaliseOutline(items: ChapterOutline[] | undefined, startAt: n
  * Cron entry: for each book with autoDaily > 0, generate that many chapters.
  * Stops early if a book has reached its target. Errors are recorded per book and don't stop others.
  */
-export async function runDaily(env: Env, fetchImpl?: typeof fetch, maxTotal = 10) {
+export async function runDaily(env: Env, fetchImpl?: typeof fetch, maxTotal = 10, budgetMs = 8 * 60 * 1000) {
+  const started = Date.now();
   const repo = new Repo(env.DB);
   const settings = await loadSettings(env, repo);
   const pipeline = new Pipeline(repo, makeClient(env, settings, fetchImpl), settings);
@@ -274,7 +382,8 @@ export async function runDaily(env: Env, fetchImpl?: typeof fetch, maxTotal = 10
     report.push(entry);
     try {
       if (!book.bible) await pipeline.generateBible(book.id);
-      for (let i = 0; i < book.autoDaily && total < maxTotal; i++) {
+      // Each chapter with QC takes several minutes; don't start one that could hit the 15-minute cron limit.
+      for (let i = 0; i < book.autoDaily && total < maxTotal && Date.now() - started < budgetMs; i++) {
         const next = await repo.nextChapterNumber(book.id);
         if (next > book.targetChapters) break;
         await pipeline.generateChapter(book.id);

@@ -76,6 +76,10 @@ export interface StoryState {
   openThreads: string[]; facts: string[];
 }
 export interface Issue { severity: 'high' | 'medium' | 'low'; category: string; quote: string; problem: string; fix: string }
+export interface QcReport {
+  ranAt: string; aiScoreBefore: number; aiScoreAfter: number; aiEditApplied: boolean; aiTells: string[];
+  issuesFound: Issue[]; issuesFixed: number; remaining: Issue[]; verdict: 'passed' | 'needs_review'; notes: string[];
+}
 export interface Book {
   id: string; title: string; platform: string; language: string; genre: string; tropes: string[]; premise: string;
   pov: 'first' | 'third'; tense: 'past' | 'present'; heatLevel: 'clean' | 'sweet' | 'steamy';
@@ -84,7 +88,7 @@ export interface Book {
   hasBible?: boolean; chapterCount?: number; totalWords?: number; publishedCount?: number;
 }
 export interface Chapter {
-  id: string; bookId: string; number: number; title: string; content: string; summary: string; state: StoryState | null; wordCount: number;
+  id: string; bookId: string; number: number; title: string; content: string; summary: string; state: StoryState | null; qc: QcReport | null; wordCount: number;
   status: 'draft' | 'ready' | 'published'; publishedUrl: string; publishedAt: string | null; createdAt: string; updatedAt: string;
 }
 export interface Job { id: string; type: string; status: string; detail: string; error: string; created_at: string; finished_at: string | null }

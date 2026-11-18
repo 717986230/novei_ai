@@ -92,6 +92,7 @@ export interface Chapter {
   content: string;
   summary: string;
   state: StoryState | null;
+  qc: QcReport | null;
   wordCount: number;
   status: ChapterStatus;
   publishedUrl: string;
@@ -100,7 +101,34 @@ export interface Chapter {
   updatedAt: string;
 }
 
+export interface QcIssue {
+  severity: 'high' | 'medium' | 'low';
+  category: string;
+  quote: string;
+  problem: string;
+  fix: string;
+}
+
+/** Result of the automatic quality-control pass stored on each generated chapter. */
+export interface QcReport {
+  ranAt: string;
+  /** AI-flavour score before / after the line edit (0 = clean). */
+  aiScoreBefore: number;
+  aiScoreAfter: number;
+  aiEditApplied: boolean;
+  /** Remaining AI tells after QC, for the author to glance at. */
+  aiTells: string[];
+  issuesFound: QcIssue[];
+  issuesFixed: number;
+  /** Issues still reported after the fix pass. */
+  remaining: QcIssue[];
+  verdict: 'passed' | 'needs_review';
+  notes: string[];
+}
+
 export interface Settings {
+  /** Run AI-flavour edit + continuity check/fix after every generated chapter. */
+  autoQc: boolean;
   model: string;
   /** Used automatically when the main model is overloaded. Empty = no fallback. */
   fallbackModel: string;

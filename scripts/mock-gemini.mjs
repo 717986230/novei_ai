@@ -53,7 +53,7 @@ function reply(body) {
   }
   if (prompt.startsWith('Summarise')) return 'Mara confronts Kael in the pack hall; he realises she is an Alpha now.';
   if (prompt.includes('chapter title')) return '"Chapter 9: Moonfall"';
-  if (prompt.includes('Revise chapter')) return '# Chapter 1\n\n' + Array.from({ length: 12 }, (_, i) => 'REVISED. ' + para(i)).join('\n\n');
+  if (prompt.includes('Revise the chapter above') || prompt.includes('Line-edit the chapter above')) return '# Chapter 1\n\n' + Array.from({ length: 12 }, (_, i) => 'REVISED. ' + para(i)).join('\n\n');
   return '# Chapter X: Heading to strip\n\n' + Array.from({ length: 14 }, (_, i) => para(i)).join('\n') + '\n---\nThe end of the scene.';
 }
 

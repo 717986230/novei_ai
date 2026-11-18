@@ -1,5 +1,5 @@
 import { HttpError } from './errors';
-import type { Book, Chapter, ChapterStatus, Settings, StoryBible, StoryState } from './types';
+import type { Book, Chapter, ChapterStatus, QcReport, Settings, StoryBible, StoryState } from './types';
 
 export const now = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
@@ -44,6 +44,7 @@ function rowToChapter(r: any): Chapter {
     content: r.content ?? '',
     summary: r.summary ?? '',
     state: parseJson<StoryState | null>(r.state, null),
+    qc: parseJson<QcReport | null>(r.qc, null),
     wordCount: r.word_count,
     status: r.status,
     publishedUrl: r.published_url,
@@ -150,7 +151,7 @@ export class Repo {
   async listChapters(bookId: string, withContent = false): Promise<Chapter[]> {
     const cols = withContent
       ? '*'
-      : "id,book_id,number,title,'' AS content,summary,NULL AS state,word_count,status,published_url,published_at,created_at,updated_at";
+      : "id,book_id,number,title,'' AS content,summary,NULL AS state,qc,word_count,status,published_url,published_at,created_at,updated_at";
     const { results } = await this.db.prepare(`SELECT ${cols} FROM chapters WHERE book_id=? ORDER BY number`).bind(bookId).all();
     return results.map(rowToChapter);
   }
@@ -218,7 +219,7 @@ export class Repo {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, 'title' | 'content' | 'summary' | 'status' | 'publishedUrl' | 'state'>> & { wordCount?: number },
+    patch: Partial<Pick<Chapter, 'title' | 'content' | 'summary' | 'status' | 'publishedUrl' | 'state' | 'qc'>> & { wordCount?: number },
   ): Promise<Chapter> {
     const current = await this.getChapter(id);
     const sets: string[] = [];
@@ -232,6 +233,7 @@ export class Repo {
     if (patch.wordCount !== undefined) set('word_count', patch.wordCount);
     if (patch.summary !== undefined) set('summary', patch.summary);
     if (patch.state !== undefined) set('state', patch.state ? JSON.stringify(patch.state) : null);
+    if (patch.qc !== undefined) set('qc', patch.qc ? JSON.stringify(patch.qc) : null);
     if (patch.publishedUrl !== undefined) set('published_url', patch.publishedUrl);
     if (patch.status !== undefined) {
       if (!['draft', 'ready', 'published'].includes(patch.status)) throw new HttpError(400, 'Invalid status');
@@ -255,8 +257,8 @@ export class Repo {
   // ---------- jobs (also used as a per-book lock) ----------
   async startJob(bookId: string | null, type: string, detail = ''): Promise<string> {
     if (bookId) {
-      // A job older than 5 minutes is considered dead (e.g. the browser disconnected and the Worker was cancelled).
-      const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      // A job older than 15 minutes is considered dead (generation + automatic QC can take several minutes).
+      const stale = new Date(Date.now() - 15 * 60 * 1000).toISOString();
       await this.db
         .prepare("UPDATE jobs SET status='failed', error='timed out', finished_at=? WHERE book_id=? AND status='running' AND created_at<?")
         .bind(now(), bookId, stale)
@@ -297,6 +299,7 @@ export class Repo {
     for (const r of results) {
       if (r.key === 'model' && r.value) s.model = r.value;
       if (r.key === 'fallbackModel') s.fallbackModel = r.value;
+      if (r.key === 'autoQc') s.autoQc = r.value !== 'false';
       if (r.key === 'temperature' && !Number.isNaN(Number(r.value))) s.temperature = Number(r.value);
     }
     return s;
