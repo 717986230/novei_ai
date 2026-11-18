@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "novel-ai-global",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+
+  // Vue 前端 (web/dist) 由同一个 Worker 托管；/api/* 先进 Worker
+  "assets": {
+    "directory": "web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "novel_ai",
+      // 运行 `npx wrangler d1 create novel_ai` 后把返回的 id 填到这里
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // 每天 UTC 06:17 自动续写开启了“每日自动更新”的书
+  "triggers": { "crons": ["17 6 * * *"] },
+
+  "vars": {
+    "GEMINI_MODEL": "gemini-3.8-flash"
+  }
+  // 机密（不要写在这里）:
+  //   npx wrangler secret put GEMINI_API_KEY
+  //   npx wrangler secret put ADMIN_TOKEN
+}
