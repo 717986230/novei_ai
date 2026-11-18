@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import { countWords } from '../../../worker/src/format';
-import { api, loadPlatforms, STATUS_LABEL, type Book, type Chapter, type Platform } from '../api';
+import { api, loadPlatforms, STATUS_LABEL, type Book, type Chapter, type Issue, type Platform } from '../api';
+import StateView from '../components/StateView.vue';
 import { copyChapter } from '../clipboard';
 import { toast } from '../toast';
 
@@ -20,6 +21,8 @@ const publishedUrl = ref('');
 const instruction = ref('');
 const busy = ref('');
 const error = ref('');
+const issues = ref<(Issue & { pick: boolean })[] | null>(null);
+const SEV: Record<string, string> = { high: '严重', medium: '中等', low: '轻微' };
 
 const dirty = computed(
   () =>
@@ -103,7 +106,29 @@ const regenerate = () =>
   aiAction('重新生成本章', () =>
     api(`/books/${chapter.value!.bookId}/chapters/generate`, { body: { number: chapter.value!.number, instruction: instruction.value || undefined } }),
   );
-const resummarize = () => aiAction('更新摘要', () => api(`/chapters/${props.id}/summary`, { method: 'POST' }));
+const refreshLedger = () => aiAction('更新摘要与账本', () => api(`/chapters/${props.id}/ledger`, { method: 'POST' }));
+
+async function check() {
+  if (dirty.value) await save();
+  busy.value = '一致性检查中';
+  error.value = '';
+  issues.value = null;
+  try {
+    const r = await api<{ issues: Issue[] }>(`/chapters/${props.id}/check`, { method: 'POST' });
+    issues.value = r.issues.map((i) => ({ ...i, pick: i.severity !== 'low' }));
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busy.value = '';
+  }
+}
+
+async function fixIssues() {
+  const picked = (issues.value ?? []).filter((i) => i.pick).map(({ pick, ...i }) => i);
+  if (!picked.length) return;
+  await aiAction(`修正 ${picked.length} 处问题`, () => api(`/chapters/${props.id}/fix`, { body: { issues: picked } }));
+  issues.value = null;
+}
 
 async function remove() {
   if (!confirm(`删除第 ${chapter.value?.number} 章？`)) return;
@@ -171,10 +196,34 @@ async function remove() {
       </div>
     </div>
 
+    <div class="card">
+      <div class="row between">
+        <h2 style="margin: 0">一致性检查</h2>
+        <button class="primary" :disabled="!!busy" @click="check">检查本章</button>
+      </div>
+      <p class="small muted">对照人物卡、世界规则、前情和连续性账本，找出人名/外貌/口吻/谁知道什么/时间地点/伤势道具/伏笔等矛盾。</p>
+      <p v-if="issues && !issues.length" class="ok small">✓ 没发现矛盾</p>
+      <ul v-if="issues?.length" class="list small">
+        <li v-for="(i, n) in issues" :key="n">
+          <label class="row" style="margin: 0; color: var(--text); flex-wrap: nowrap; align-items: flex-start">
+            <input v-model="i.pick" type="checkbox" style="width: auto; margin-top: 4px" />
+            <span>
+              <span :class="i.severity === 'high' ? 'err' : i.severity === 'medium' ? 'warn' : 'muted'">[{{ SEV[i.severity] ?? i.severity }} · {{ i.category }}]</span>
+              {{ i.problem }}<br />
+              <span class="muted">原文：“{{ i.quote }}” → {{ i.fix }}</span>
+            </span>
+          </label>
+        </li>
+      </ul>
+      <button v-if="issues?.length" :disabled="!!busy || !issues.some((i) => i.pick)" @click="fixIssues">AI 修正选中问题</button>
+    </div>
+
     <details class="card">
-      <summary>本章摘要（用于保持后续章节连贯）</summary>
+      <summary>本章摘要与连续性账本（写下一章时使用）</summary>
       <pre class="wrap small">{{ chapter.summary || '（无）' }}</pre>
-      <button class="small" :disabled="!!busy" @click="resummarize">根据正文重新生成摘要</button>
+      <StateView v-if="chapter.state" :state="chapter.state" style="margin-top: 10px" />
+      <p class="small muted">手动改过正文后，点下面按钮让账本跟上，否则后续章节会按旧内容续写。</p>
+      <button class="small" :disabled="!!busy" @click="refreshLedger">根据正文更新摘要与账本</button>
     </details>
 
     <button class="danger" @click="remove">删除本章</button>

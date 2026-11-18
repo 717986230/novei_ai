@@ -6,26 +6,45 @@ import {
   bibleSchema,
   biblePrompt,
   chapterPrompt,
+  checkPrompt,
+  expandPrompt,
+  checkSchema,
   outlinePrompt,
   outlineSchema,
   rewritePrompt,
-  summaryPrompt,
+  statePrompt,
+  stateSchema,
   systemPrompt,
   titlePrompt,
 } from './prompts';
-import type { Book, Chapter, ChapterOutline, Env, Settings, StoryBible } from './types';
+import type { Book, Chapter, ChapterOutline, Env, Settings, StoryBible, StoryState } from './types';
+
+export interface ContinuityIssue {
+  severity: 'high' | 'medium' | 'low';
+  category: string;
+  quote: string;
+  problem: string;
+  fix: string;
+}
 
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_FALLBACK = 'gemini-3.5-flash-lite';
 const OUTLINE_BATCH = 20;
 const SUMMARY_WINDOW = 12;
 const TAIL_CHARS = 1800;
 
 export async function loadSettings(env: Env, repo: Repo): Promise<Settings> {
-  return repo.getSettings({ model: env.GEMINI_MODEL || DEFAULT_MODEL, temperature: 0.9 });
+  return repo.getSettings({ model: env.GEMINI_MODEL || DEFAULT_MODEL, fallbackModel: DEFAULT_FALLBACK, temperature: 0.9 });
 }
 
 export function makeClient(env: Env, settings: Settings, fetchImpl?: typeof fetch) {
-  return new GeminiClient({ apiKey: env.GEMINI_API_KEY, model: settings.model, baseUrl: env.GEMINI_BASE_URL, fetchImpl });
+  return new GeminiClient({
+    apiKey: env.GEMINI_API_KEY,
+    model: settings.model,
+    fallbackModels: settings.fallbackModel ? [settings.fallbackModel] : [],
+    baseUrl: env.GEMINI_BASE_URL,
+    fetchImpl,
+  });
 }
 
 export class Pipeline {
@@ -73,10 +92,11 @@ export class Pipeline {
     const last = bible.outline.reduce((m, o) => Math.max(m, o.number), 0);
     const from = last + 1;
     const to = from + count - 1;
-    const recent = await this.repo.previousSummaries(book.id, from, 5);
+    const recent = await this.repo.previousSummaries(book.id, from, 8);
+    const state = await this.repo.latestState(book.id);
     const r = await this.ai.generateJson<{ outline: ChapterOutline[] }>({
       system: systemPrompt(book),
-      prompt: outlinePrompt(book, bible, from, to, recent.map((c) => `Ch ${c.number}: ${c.summary}`).join('\n')),
+      prompt: outlinePrompt(book, bible, from, to, recent.map((c) => `Ch ${c.number}: ${c.summary}`).join('\n'), state),
       responseSchema: outlineSchema,
       temperature: this.settings.temperature,
     });
@@ -97,29 +117,34 @@ export class Pipeline {
         book = await this.extendOutlineInner(book, OUTLINE_BATCH);
       }
       const outline = book.bible?.outline.find((o) => o.number === number);
+      const nextOutline = book.bible?.outline.find((o) => o.number === number + 1);
       const previous = await this.repo.previousSummaries(bookId, number, SUMMARY_WINDOW);
       const prevChapter = number > 1 ? await this.repo.getChapterByNumber(bookId, number - 1) : null;
+      const state = await this.repo.stateBefore(bookId, number);
 
       const res = await this.ai.generate({
         system: systemPrompt(book),
         prompt: chapterPrompt(book, {
           number,
           outline,
+          nextOutline,
           previous,
+          state,
           previousTail: prevChapter ? prevChapter.content.slice(-TAIL_CHARS) : '',
           instruction: opts.instruction,
         }),
         temperature: this.settings.temperature,
       });
       const title0 = outline?.title ?? '';
-      const content = cleanChapterText(res.text, title0);
+      let content = cleanChapterText(res.text, title0);
       if (countWords(content) < 200) throw new HttpError(502, `Gemini returned a very short chapter (finishReason=${res.finishReason}). Try again.`);
+      content = await this.expandIfShort(book, number, content);
 
-      const [title, summary] = await Promise.all([
+      const [title, ledger] = await Promise.all([
         title0 ? Promise.resolve(title0) : this.makeTitle(book, number, content),
-        this.makeSummary(content),
+        this.makeLedger(book, number, content, state),
       ]);
-      return this.repo.upsertChapter({ bookId, number, title, content, summary, wordCount: countWords(content) });
+      return this.repo.upsertChapter({ bookId, number, title, content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
     });
   }
 
@@ -128,27 +153,99 @@ export class Pipeline {
     return this.repo.getChapter(chapterId).then((chapter) =>
       this.withJob(chapter.bookId, 'rewrite', `#${chapter.number}`, async () => {
         const book = await this.repo.getBook(chapter.bookId);
+        const prevState = await this.repo.stateBefore(book.id, chapter.number);
         const res = await this.ai.generate({
           system: systemPrompt(book),
-          prompt: rewritePrompt(book, chapter, instruction),
+          prompt: rewritePrompt(book, chapter, instruction, prevState),
           temperature: this.settings.temperature,
         });
         const content = cleanChapterText(res.text, chapter.title);
-        const summary = await this.makeSummary(content);
-        return this.repo.updateChapter(chapterId, { content, summary, wordCount: countWords(content) });
+        const ledger = await this.makeLedger(book, chapter.number, content, prevState);
+        return this.repo.updateChapter(chapterId, { content, summary: ledger.summary, state: ledger.state, wordCount: countWords(content) });
       }),
     );
   }
 
-  async makeSummary(content: string): Promise<string> {
-    const r = await this.ai.generate({ prompt: summaryPrompt(content), temperature: 0.3, maxOutputTokens: 4096 });
-    return r.text.trim();
+  /** One expansion pass when the model under-delivers on length (common with lite/fallback models). */
+  private async expandIfShort(book: Book, number: number, content: string): Promise<string> {
+    const words = countWords(content);
+    if (words >= book.wordsPerChapter * 0.8) return content;
+    try {
+      const r = await this.ai.generate({ system: systemPrompt(book), prompt: expandPrompt(book, number, content, words), temperature: this.settings.temperature });
+      const expanded = cleanChapterText(r.text);
+      // Accept only if it really got longer.
+      return countWords(expanded) > words * 1.15 ? expanded : content;
+    } catch {
+      return content;
+    }
+  }
+
+  /** Summary + continuity ledger as of the end of this chapter. */
+  async makeLedger(book: Book, number: number, content: string, prevState: StoryState | null): Promise<{ summary: string; state: StoryState }> {
+    const r = await this.ai.generateJson<{ summary: string; state: StoryState }>({
+      prompt: statePrompt(book, number, content, prevState),
+      responseSchema: stateSchema,
+      temperature: 0.2,
+    });
+    return { summary: String(r.summary ?? '').trim(), state: normaliseState(r.state) };
+  }
+
+  /** Re-extract the ledger for a chapter (e.g. after manual edits). */
+  refreshLedger(chapterId: string): Promise<Chapter> {
+    return this.repo.getChapter(chapterId).then((chapter) =>
+      this.withJob(chapter.bookId, 'ledger', `#${chapter.number}`, async () => {
+        const book = await this.repo.getBook(chapter.bookId);
+        const prevState = await this.repo.stateBefore(book.id, chapter.number);
+        const ledger = await this.makeLedger(book, chapter.number, chapter.content, prevState);
+        return this.repo.updateChapter(chapterId, { summary: ledger.summary, state: ledger.state });
+      }),
+    );
+  }
+
+  /** Continuity check against bible + ledger + earlier summaries. Read-only. */
+  async checkChapter(chapterId: string): Promise<ContinuityIssue[]> {
+    const chapter = await this.repo.getChapter(chapterId);
+    const book = await this.repo.getBook(chapter.bookId);
+    const [prevState, previous] = await Promise.all([
+      this.repo.stateBefore(book.id, chapter.number),
+      this.repo.previousSummaries(book.id, chapter.number, SUMMARY_WINDOW),
+    ]);
+    const r = await this.ai.generateJson<{ issues: ContinuityIssue[] }>({
+      prompt: checkPrompt(book, chapter, prevState, previous),
+      responseSchema: checkSchema,
+      temperature: 0.1,
+    });
+    return (r.issues ?? []).filter((i) => i && i.problem);
+  }
+
+  /** Rewrite the chapter fixing the given issues (minimal edits). */
+  fixChapter(chapterId: string, issues: ContinuityIssue[]): Promise<Chapter> {
+    if (!issues.length) throw new HttpError(400, 'No issues to fix');
+    const instruction = [
+      'Fix ONLY these continuity errors with minimal changes; keep everything else (wording, events, length) as is:',
+      ...issues.map((i, n) => `${n + 1}. At "${i.quote}": ${i.problem} -> ${i.fix}`),
+    ].join('\n');
+    return this.rewriteChapter(chapterId, instruction);
   }
 
   private async makeTitle(book: Book, number: number, content: string): Promise<string> {
     const r = await this.ai.generate({ prompt: titlePrompt(book, number, content), temperature: 0.8, maxOutputTokens: 2048 });
     return cleanTitle(r.text);
   }
+}
+
+export function normaliseState(s: Partial<StoryState> | undefined): StoryState {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
+  return {
+    time: str(s?.time),
+    location: str(s?.location),
+    characters: (Array.isArray(s?.characters) ? s!.characters : [])
+      .filter((c: any) => c && str(c.name))
+      .map((c: any) => ({ name: str(c.name), status: str(c.status), location: str(c.location), knowledge: str(c.knowledge), relationships: str(c.relationships) })),
+    openThreads: list(s?.openThreads).slice(0, 30),
+    facts: [...new Set(list(s?.facts))].slice(0, 60),
+  };
 }
 
 export function normaliseOutline(items: ChapterOutline[] | undefined, startAt: number): ChapterOutline[] {

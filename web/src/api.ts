@@ -33,7 +33,17 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     const data = await res.json().catch(() => ({}));
     throw new ApiError(res.status, data.error ?? `请求失败 (${res.status})`);
   }
-  return (opts.raw ? res.text() : res.json()) as Promise<T>;
+  if (opts.raw) return (await res.text()) as T;
+  const data = await res.json();
+  // Long AI calls stream back 200 + JSON; failures arrive as {error, status}.
+  if (data && typeof data === 'object' && 'error' in data && data.error) {
+    if (data.status === 401) {
+      setToken('');
+      router.push('/login');
+    }
+    throw new ApiError(data.status ?? 500, data.error);
+  }
+  return data as T;
 }
 
 export async function download(path: string, fallbackName: string) {
@@ -55,10 +65,17 @@ export interface Platform {
   style: string[]; pasteFormat: 'plain' | 'html'; policyNote: string; disclosureNote: string; languages: string[];
 }
 export interface Outline { number: number; title: string; beats: string }
+export interface Character { name: string; role: string; description: string; appearance?: string; voice?: string; relationships?: string }
 export interface Bible {
-  logline: string; blurb: string; tags: string[]; setting: string;
-  characters: { name: string; role: string; description: string }[]; outline: Outline[];
+  logline: string; blurb: string; tags: string[]; setting: string; worldRules?: string[];
+  characters: Character[]; outline: Outline[];
 }
+export interface StoryState {
+  time: string; location: string;
+  characters: { name: string; status: string; location: string; knowledge: string; relationships: string }[];
+  openThreads: string[]; facts: string[];
+}
+export interface Issue { severity: 'high' | 'medium' | 'low'; category: string; quote: string; problem: string; fix: string }
 export interface Book {
   id: string; title: string; platform: string; language: string; genre: string; tropes: string[]; premise: string;
   pov: 'first' | 'third'; tense: 'past' | 'present'; heatLevel: 'clean' | 'sweet' | 'steamy';
@@ -67,7 +84,7 @@ export interface Book {
   hasBible?: boolean; chapterCount?: number; totalWords?: number; publishedCount?: number;
 }
 export interface Chapter {
-  id: string; bookId: string; number: number; title: string; content: string; summary: string; wordCount: number;
+  id: string; bookId: string; number: number; title: string; content: string; summary: string; state: StoryState | null; wordCount: number;
   status: 'draft' | 'ready' | 'published'; publishedUrl: string; publishedAt: string | null; createdAt: string; updatedAt: string;
 }
 export interface Job { id: string; type: string; status: string; detail: string; error: string; created_at: string; finished_at: string | null }

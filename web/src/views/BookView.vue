@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, download, HEAT_LABEL, loadPlatforms, STATUS_LABEL, type Book, type Chapter, type Job, type Platform } from '../api';
+import { api, download, HEAT_LABEL, loadPlatforms, STATUS_LABEL, type Book, type Chapter, type Job, type Platform, type StoryState } from '../api';
+import StateView from '../components/StateView.vue';
 import { copyChapter } from '../clipboard';
 import { toast } from '../toast';
 
@@ -11,6 +12,7 @@ const router = useRouter();
 const book = ref<Book | null>(null);
 const chapters = ref<Chapter[]>([]);
 const jobs = ref<Job[]>([]);
+const ledger = ref<StoryState | null>(null);
 const platform = ref<Platform | null>(null);
 const languages = ref<Record<string, string>>({});
 const tab = ref<'chapters' | 'bible' | 'info' | 'export'>('chapters');
@@ -29,8 +31,9 @@ const totalWords = computed(() => chapters.value.reduce((s, c) => s + c.wordCoun
 const nextOutline = computed(() => book.value?.bible?.outline.find((o) => o.number === nextNumber.value));
 
 async function load() {
-  const r = await api<{ book: Book; chapters: Chapter[]; jobs: Job[] }>(`/books/${props.id}`);
+  const r = await api<{ book: Book; chapters: Chapter[]; jobs: Job[]; state: StoryState | null }>(`/books/${props.id}`);
   book.value = r.book;
+  ledger.value = r.state;
   chapters.value = r.chapters;
   jobs.value = r.jobs;
   bibleText.value = r.book.bible ? JSON.stringify(r.book.bible, null, 2) : '';
@@ -211,9 +214,27 @@ const fmtTime = (s: string) => new Date(s).toLocaleString();
         </div>
         <div class="card">
           <h2>人物</h2>
-          <ul class="list"><li v-for="ch in book.bible.characters" :key="ch.name"><strong>{{ ch.name }}</strong> <span class="muted">· {{ ch.role }}</span><div class="small">{{ ch.description }}</div></li></ul>
+          <ul class="list">
+            <li v-for="ch in book.bible.characters" :key="ch.name">
+              <strong>{{ ch.name }}</strong> <span class="muted">· {{ ch.role }}</span>
+              <div class="small">{{ ch.description }}</div>
+              <div v-if="ch.appearance" class="small"><span class="muted">外貌（固定）：</span>{{ ch.appearance }}</div>
+              <div v-if="ch.voice" class="small"><span class="muted">说话方式：</span>{{ ch.voice }}</div>
+              <div v-if="ch.relationships" class="small"><span class="muted">初始关系：</span>{{ ch.relationships }}</div>
+            </li>
+          </ul>
           <h2 style="margin-top: 14px">世界观</h2>
           <pre class="wrap small">{{ book.bible.setting }}</pre>
+          <template v-if="book.bible.worldRules?.length">
+            <h3 style="margin-top: 10px">世界/力量体系规则</h3>
+            <ul class="small" style="margin: 0; padding-left: 18px"><li v-for="r in book.bible.worldRules" :key="r">{{ r }}</li></ul>
+          </template>
+        </div>
+        <div class="card">
+          <h2>连续性账本（最新章节结束时）</h2>
+          <p class="small muted">每章写完 AI 自动记录：人物状态、谁知道什么、未收伏笔、已确立事实。写下一章时作为硬性约束。</p>
+          <StateView v-if="ledger" :state="ledger" />
+          <p v-else class="muted small">还没有章节。</p>
         </div>
         <div class="card">
           <div class="row between"><h2 style="margin: 0">大纲（{{ book.bible.outline.length }} 章）</h2><button :disabled="!!busy || !!running" @click="extendOutline">续写 20 章大纲</button></div>

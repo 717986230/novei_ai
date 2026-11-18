@@ -36,6 +36,35 @@ async function safeEqual(a: string, b: string) {
   return diff === 0 && a.length > 0;
 }
 
+/**
+ * AI calls can take minutes. Stream the response and send a space every 10s so neither
+ * Cloudflare's edge nor the browser/mobile network treats the connection as idle.
+ * The body is always JSON (leading whitespace is valid); failures come back as {error, status}.
+ */
+function longJson(c: { executionCtx: { waitUntil(p: Promise<unknown>): void } }, work: () => Promise<unknown>): Response {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+  const write = (s: string) => writer.write(enc.encode(s)).catch(() => {});
+  write(' ');
+  const ping = setInterval(() => write(' '), 10_000);
+  const done = work()
+    .then(
+      (r) => JSON.stringify(r),
+      (e) => {
+        if (!(e instanceof HttpError)) console.error(e);
+        return JSON.stringify({ error: (e as Error).message || 'Internal error', status: e instanceof HttpError ? e.status : 500 });
+      },
+    )
+    .then(async (body) => {
+      clearInterval(ping);
+      await write(body);
+      await writer.close().catch(() => {});
+    });
+  c.executionCtx.waitUntil(done);
+  return new Response(readable, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
 const pipelineFor = async (c: { env: Env; get: (k: 'repo') => Repo }) => {
   const repo = c.get('repo');
   const settings = await loadSettings(c.env, repo);
@@ -50,11 +79,15 @@ app.get('/platforms', (c) => c.json({ platforms: Object.values(PLATFORMS), langu
 
 app.get('/settings', async (c) => c.json(await loadSettings(c.env, c.get('repo'))));
 app.put('/settings', async (c) => {
-  const b = await c.req.json<{ model?: string; temperature?: number }>();
+  const b = await c.req.json<{ model?: string; fallbackModel?: string; temperature?: number }>();
   const patch: Record<string, unknown> = {};
   if (b.model !== undefined) {
     if (!/^[\w.\-]+$/.test(b.model)) throw new HttpError(400, 'Invalid model id');
     patch.model = b.model;
+  }
+  if (b.fallbackModel !== undefined) {
+    if (b.fallbackModel !== '' && !/^[\w.\-]+$/.test(b.fallbackModel)) throw new HttpError(400, 'Invalid fallback model id');
+    patch.fallbackModel = b.fallbackModel;
   }
   if (b.temperature !== undefined) {
     const t = Number(b.temperature);
@@ -66,9 +99,11 @@ app.put('/settings', async (c) => {
 });
 app.post('/settings/test', async (c) => {
   const p = await pipelineFor(c);
-  const t0 = Date.now();
-  const r = await p.ai.generate({ prompt: 'Reply with the single word: ready', maxOutputTokens: 1024, temperature: 0 });
-  return c.json({ ok: true, model: p.ai.model, reply: r.text.trim().slice(0, 50), ms: Date.now() - t0 });
+  return longJson(c, async () => {
+    const t0 = Date.now();
+    const r = await p.ai.generate({ prompt: 'Reply with the single word: ready', maxOutputTokens: 1024, temperature: 0 });
+    return { ok: true, model: r.model, fellBack: r.model !== p.ai.model, reply: r.text.trim().slice(0, 50), ms: Date.now() - t0 };
+  });
 });
 
 // ---- books ----
@@ -142,8 +177,8 @@ app.post('/books', async (c) => {
 app.get('/books/:id', async (c) => {
   const repo = c.get('repo');
   const id = c.req.param('id');
-  const [book, chapters, jobs] = await Promise.all([repo.getBook(id), repo.listChapters(id), repo.listJobs(id, 10)]);
-  return c.json({ book, chapters, jobs });
+  const [book, chapters, jobs, state] = await Promise.all([repo.getBook(id), repo.listChapters(id), repo.listJobs(id, 10), repo.latestState(id)]);
+  return c.json({ book, chapters, jobs, state });
 });
 
 app.patch('/books/:id', async (c) => {
@@ -156,16 +191,24 @@ app.delete('/books/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-app.post('/books/:id/bible', async (c) => c.json({ book: await (await pipelineFor(c)).generateBible(c.req.param('id')) }));
-app.post('/books/:id/outline', async (c) => c.json({ book: await (await pipelineFor(c)).extendOutline(c.req.param('id')) }));
+app.post('/books/:id/bible', async (c) => {
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ book: await p.generateBible(c.req.param('id')) }));
+});
+app.post('/books/:id/outline', async (c) => {
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ book: await p.extendOutline(c.req.param('id')) }));
+});
 
 app.post('/books/:id/chapters/generate', async (c) => {
   const b = await c.req.json<{ number?: number; instruction?: string }>().catch(() => ({}) as any);
-  const chapter = await (await pipelineFor(c)).generateChapter(c.req.param('id'), {
-    number: b.number ? Number(b.number) : undefined,
-    instruction: typeof b.instruction === 'string' ? b.instruction.slice(0, 2000) : undefined,
-  });
-  return c.json({ chapter });
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({
+    chapter: await p.generateChapter(c.req.param('id'), {
+      number: b.number ? Number(b.number) : undefined,
+      instruction: typeof b.instruction === 'string' ? b.instruction.slice(0, 2000) : undefined,
+    }),
+  }));
 });
 
 app.get('/books/:id/export', async (c) => {
@@ -208,14 +251,35 @@ app.patch('/chapters/:id', async (c) => {
 
 app.post('/chapters/:id/rewrite', async (c) => {
   const b = await c.req.json<{ instruction?: string }>();
-  return c.json({ chapter: await (await pipelineFor(c)).rewriteChapter(c.req.param('id'), String(b.instruction ?? '').slice(0, 2000)) });
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ chapter: await p.rewriteChapter(c.req.param('id'), String(b.instruction ?? '').slice(0, 2000)) }));
 });
 
-app.post('/chapters/:id/summary', async (c) => {
-  const repo = c.get('repo');
-  const ch = await repo.getChapter(c.req.param('id'));
-  const summary = await (await pipelineFor(c)).makeSummary(ch.content);
-  return c.json({ chapter: await repo.updateChapter(ch.id, { summary }) });
+// Re-extract summary + continuity ledger (after manual edits)
+app.post('/chapters/:id/ledger', async (c) => {
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ chapter: await p.refreshLedger(c.req.param('id')) }));
+});
+
+// Continuity check (read-only)
+app.post('/chapters/:id/check', async (c) => {
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ issues: await p.checkChapter(c.req.param('id')) }));
+});
+
+// Fix the given continuity issues with a minimal rewrite
+app.post('/chapters/:id/fix', async (c) => {
+  const b = await c.req.json<{ issues?: unknown }>();
+  if (!Array.isArray(b.issues)) throw new HttpError(400, 'issues must be an array');
+  const issues = (b.issues as any[]).slice(0, 30).map((i) => ({
+    severity: String(i?.severity ?? 'medium') as any,
+    category: String(i?.category ?? 'other'),
+    quote: String(i?.quote ?? '').slice(0, 500),
+    problem: String(i?.problem ?? '').slice(0, 1000),
+    fix: String(i?.fix ?? '').slice(0, 1000),
+  }));
+  const p = await pipelineFor(c);
+  return longJson(c, async () => ({ chapter: await p.fixChapter(c.req.param('id'), issues) }));
 });
 
 app.delete('/chapters/:id', async (c) => {
@@ -224,7 +288,7 @@ app.delete('/chapters/:id', async (c) => {
 });
 
 // ---- manual trigger of the daily job (same as cron) ----
-app.post('/cron/run', async (c) => c.json({ report: await runDaily(c.env) }));
+app.post('/cron/run', async (c) => longJson(c, async () => ({ report: await runDaily(c.env) })));
 
 app.all('*', (c) => c.json({ error: 'Not found' }, 404));
 

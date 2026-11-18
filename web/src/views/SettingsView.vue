@@ -14,7 +14,8 @@ const MODELS = [
 const model = ref('');
 const custom = ref('');
 const temperature = ref(0.9);
-const test = ref<{ ok?: boolean; reply?: string; ms?: number; model?: string; error?: string } | null>(null);
+const fallback = ref('gemini-3.5-flash-lite');
+const test = ref<{ ok?: boolean; reply?: string; ms?: number; model?: string; fellBack?: boolean; error?: string } | null>(null);
 const testing = ref(false);
 const error = ref('');
 const report = ref<any[] | null>(null);
@@ -23,8 +24,9 @@ const router = useRouter();
 
 onMounted(async () => {
   try {
-    const s = await api<{ model: string; temperature: number }>('/settings');
+    const s = await api<{ model: string; fallbackModel: string; temperature: number }>('/settings');
     temperature.value = s.temperature;
+    fallback.value = s.fallbackModel;
     if (MODELS.some((m) => m.id === s.model)) model.value = s.model;
     else { model.value = 'custom'; custom.value = s.model; }
   } catch (e) {
@@ -35,7 +37,7 @@ onMounted(async () => {
 async function save() {
   error.value = '';
   try {
-    await api('/settings', { method: 'PUT', body: { model: model.value === 'custom' ? custom.value.trim() : model.value, temperature: temperature.value } });
+    await api('/settings', { method: 'PUT', body: { model: model.value === 'custom' ? custom.value.trim() : model.value, fallbackModel: fallback.value, temperature: temperature.value } });
     toast('已保存');
   } catch (e) {
     error.value = (e as Error).message;
@@ -85,6 +87,12 @@ function logout() {
       </select>
     </label>
     <label v-if="model === 'custom'">模型 ID<input v-model="custom" placeholder="gemini-…" /></label>
+    <label>备用模型（主模型过载/超时 75 秒时自动切换）
+      <select v-model="fallback">
+        <option value="">不使用备用</option>
+        <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+      </select>
+    </label>
     <label>创造性（temperature）：{{ temperature.toFixed(2) }}
       <input v-model.number="temperature" type="range" min="0" max="1.5" step="0.05" />
     </label>
@@ -93,7 +101,8 @@ function logout() {
       <button class="primary" @click="save">保存</button>
       <button :disabled="testing" @click="runTest">{{ testing ? '测试中…' : '保存并测试连接' }}</button>
     </div>
-    <p v-if="test?.ok" class="ok small">✓ {{ test.model }} 回复 “{{ test.reply }}”，耗时 {{ test.ms }} ms</p>
+    <p v-if="test?.ok" class="ok small">✓ {{ test.model }} 回复 “{{ test.reply }}”，耗时 {{ ((test.ms ?? 0) / 1000).toFixed(1) }} 秒</p>
+    <p v-if="test?.fellBack" class="warn small">主模型过载，本次已自动切换到备用模型。</p>
     <p v-if="test?.error" class="err small">✗ {{ test.error }}</p>
   </div>
 
