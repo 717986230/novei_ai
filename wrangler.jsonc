@@ -18,7 +18,7 @@
       "binding": "DB",
       "database_name": "novel_ai",
       // 运行 `npx wrangler d1 create novel_ai` 后把返回的 id 填到这里
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "e7fc9d61-2ced-409c-aa25-3926734b8f6e",
       "migrations_dir": "migrations"
     }
   ],

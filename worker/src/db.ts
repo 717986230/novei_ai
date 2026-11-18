@@ -1,5 +1,5 @@
 import { HttpError } from './errors';
-import type { Book, Chapter, ChapterStatus, Settings, StoryBible } from './types';
+import type { Book, Chapter, ChapterStatus, Settings, StoryBible, StoryState } from './types';
 
 export const now = () => new Date().toISOString();
 export const newId = () => crypto.randomUUID();
@@ -43,6 +43,7 @@ function rowToChapter(r: any): Chapter {
     title: r.title,
     content: r.content ?? '',
     summary: r.summary ?? '',
+    state: parseJson<StoryState | null>(r.state, null),
     wordCount: r.word_count,
     status: r.status,
     publishedUrl: r.published_url,
@@ -149,7 +150,7 @@ export class Repo {
   async listChapters(bookId: string, withContent = false): Promise<Chapter[]> {
     const cols = withContent
       ? '*'
-      : "id,book_id,number,title,'' AS content,summary,word_count,status,published_url,published_at,created_at,updated_at";
+      : "id,book_id,number,title,'' AS content,summary,NULL AS state,word_count,status,published_url,published_at,created_at,updated_at";
     const { results } = await this.db.prepare(`SELECT ${cols} FROM chapters WHERE book_id=? ORDER BY number`).bind(bookId).all();
     return results.map(rowToChapter);
   }
@@ -179,16 +180,37 @@ export class Repo {
     return results.reverse();
   }
 
-  async upsertChapter(c: { bookId: string; number: number; title: string; content: string; summary: string; wordCount: number }): Promise<Chapter> {
+  /** Continuity ledger at the end of the closest earlier chapter (normally number-1). */
+  async stateBefore(bookId: string, number: number): Promise<StoryState | null> {
+    const r = await this.db
+      .prepare('SELECT state FROM chapters WHERE book_id=? AND number<? AND state IS NOT NULL ORDER BY number DESC LIMIT 1')
+      .bind(bookId, number)
+      .first<{ state: string }>();
+    return parseJson<StoryState | null>(r?.state, null);
+  }
+
+  async latestState(bookId: string): Promise<StoryState | null> {
+    return this.stateBefore(bookId, Number.MAX_SAFE_INTEGER);
+  }
+
+  async upsertChapter(c: {
+    bookId: string;
+    number: number;
+    title: string;
+    content: string;
+    summary: string;
+    state: StoryState | null;
+    wordCount: number;
+  }): Promise<Chapter> {
     const t = now();
     await this.db
       .prepare(
-        `INSERT INTO chapters (id,book_id,number,title,content,summary,word_count,status,published_url,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,'draft','',?,?)
+        `INSERT INTO chapters (id,book_id,number,title,content,summary,state,word_count,status,published_url,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,'draft','',?,?)
          ON CONFLICT(book_id,number) DO UPDATE SET title=excluded.title, content=excluded.content, summary=excluded.summary,
-           word_count=excluded.word_count, updated_at=excluded.updated_at`,
+           state=excluded.state, word_count=excluded.word_count, updated_at=excluded.updated_at`,
       )
-      .bind(newId(), c.bookId, c.number, c.title, c.content, c.summary, c.wordCount, t, t)
+      .bind(newId(), c.bookId, c.number, c.title, c.content, c.summary, c.state ? JSON.stringify(c.state) : null, c.wordCount, t, t)
       .run();
     await this.touchBook(c.bookId);
     return (await this.getChapterByNumber(c.bookId, c.number))!;
@@ -196,7 +218,7 @@ export class Repo {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, 'title' | 'content' | 'summary' | 'status' | 'publishedUrl'>> & { wordCount?: number },
+    patch: Partial<Pick<Chapter, 'title' | 'content' | 'summary' | 'status' | 'publishedUrl' | 'state'>> & { wordCount?: number },
   ): Promise<Chapter> {
     const current = await this.getChapter(id);
     const sets: string[] = [];
@@ -209,6 +231,7 @@ export class Repo {
     if (patch.content !== undefined) set('content', patch.content);
     if (patch.wordCount !== undefined) set('word_count', patch.wordCount);
     if (patch.summary !== undefined) set('summary', patch.summary);
+    if (patch.state !== undefined) set('state', patch.state ? JSON.stringify(patch.state) : null);
     if (patch.publishedUrl !== undefined) set('published_url', patch.publishedUrl);
     if (patch.status !== undefined) {
       if (!['draft', 'ready', 'published'].includes(patch.status)) throw new HttpError(400, 'Invalid status');
@@ -273,6 +296,7 @@ export class Repo {
     const s: Settings = { ...defaults };
     for (const r of results) {
       if (r.key === 'model' && r.value) s.model = r.value;
+      if (r.key === 'fallbackModel') s.fallbackModel = r.value;
       if (r.key === 'temperature' && !Number.isNaN(Number(r.value))) s.temperature = Number(r.value);
     }
     return s;

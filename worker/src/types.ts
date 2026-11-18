@@ -15,7 +15,36 @@ export type ChapterStatus = 'draft' | 'ready' | 'published';
 export interface CharacterEntry {
   name: string;
   role: string;
+  /** Age, background, personality, goal, secret. */
   description: string;
+  /** Fixed physical details that must never drift (hair, eyes, height, scars...). */
+  appearance?: string;
+  /** How they talk: vocabulary, rhythm, verbal tics, what they never say. */
+  voice?: string;
+  /** Key relationships at the start of the story. */
+  relationships?: string;
+}
+
+export interface CharacterState {
+  name: string;
+  /** Physical/emotional condition right now (injuries, mood, power level, alive/dead). */
+  status: string;
+  location: string;
+  /** Important things this character knows or still does NOT know. */
+  knowledge: string;
+  /** Current state of their key relationships. */
+  relationships: string;
+}
+
+/** Continuity ledger as of the end of a chapter. */
+export interface StoryState {
+  time: string;
+  location: string;
+  characters: CharacterState[];
+  /** Unresolved plot threads, promises, mysteries, foreshadowing to pay off. */
+  openThreads: string[];
+  /** Established facts that later chapters must not contradict (names, rules, items, numbers, events). */
+  facts: string[];
 }
 
 export interface ChapterOutline {
@@ -29,6 +58,8 @@ export interface StoryBible {
   blurb: string;
   tags: string[];
   setting: string;
+  /** Hard rules of the world / power system that must stay consistent. */
+  worldRules?: string[];
   characters: CharacterEntry[];
   outline: ChapterOutline[];
 }
@@ -60,6 +91,7 @@ export interface Chapter {
   title: string;
   content: string;
   summary: string;
+  state: StoryState | null;
   wordCount: number;
   status: ChapterStatus;
   publishedUrl: string;
@@ -70,5 +102,7 @@ export interface Chapter {
 
 export interface Settings {
   model: string;
+  /** Used automatically when the main model is overloaded. Empty = no fallback. */
+  fallbackModel: string;
   temperature: number;
 }
